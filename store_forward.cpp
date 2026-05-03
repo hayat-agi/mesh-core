@@ -11,8 +11,7 @@ void sf_init() {
 
 bool sf_enqueue(const Packet& p, uint32_t now_ms) {
 #if DEBUG_ENABLED
-    DBG_PRINTF("[SF] enqueue request dst=0x%04X msg_id=%08X at %u ms\n",
-               p.dst_addr, (unsigned int)p.msg_id, now_ms);
+    DBG_PRINTF("[SF] enqueue request dst=0x%04X msg_id=%08X at %u ms\n", p.dst_addr, (unsigned int)p.msg_id, now_ms);
 #endif
 
     int target_idx = -1;
@@ -34,28 +33,17 @@ bool sf_enqueue(const Packet& p, uint32_t now_ms) {
 
     if (target_idx == -1) {
         if (oldest_idx != -1) {
-#if DEBUG_ENABLED
-            DBG_PRINTF("[SF] queue full, evicting oldest idx=%d (age=%u ms)\n",
-                       oldest_idx, max_age);
-#endif
             target_idx = oldest_idx;
         } else {
-#if DEBUG_ENABLED
-            DBG_PRINTLN("[SF] enqueue failed: no slot and no oldest_idx (BUG)");
-#endif
             return false;
         }
     }
-
-#if DEBUG_ENABLED
-    DBG_PRINTF("[SF] storing at idx=%d\n", target_idx);
-#endif
 
     queue[target_idx].packet       = p;
     queue[target_idx].enqueue_time = now_ms;
     queue[target_idx].retry_count  = 0;
     queue[target_idx].in_use       = true;
-    queue[target_idx].last_attempt_time = 0; // Ilk eklendiginde sifirla
+    queue[target_idx].last_attempt_time = 0; 
 
     return true; 
 }
@@ -85,50 +73,29 @@ void sf_process(uint32_t now_ms, StoreForwardSendFn send_fn) {
         }
     }
 
-    // Sirasiyla isle (En eskiden en yeniye)
     for (int k = 0; k < active_count; ++k) {
         int i = active_indices[k];
         if (!queue[i].in_use) continue; 
 
-        // Suresi tamamen dolmus mu kontrol et (Orn: 5 dk)
         if ((int32_t)(now_ms - queue[i].enqueue_time) >= QUEUE_MAX_AGE_MS) {
-#if DEBUG_ENABLED
-            DBG_PRINTF("[SF] dropping idx=%d due to age >= %u ms\n",
-                       i, QUEUE_MAX_AGE_MS);
-#endif
             queue[i].in_use = false;
             continue;
         }
 
-        // --- HIZLI DENEME (RAPID-FIRE) ENGELLEYICI ---
-        if (queue[i].last_attempt_time != 0 && (now_ms - queue[i].last_attempt_time < 5000)) {
-            continue; // Son denemeden bu yana 5 saniye gecmediyse, bu mesaji pas gec
+        // --- EXPONENTIAL BACKOFF (Üstel Geri Çekilme) ---
+        uint32_t backoff_delay = 5000 * (1 << queue[i].retry_count); 
+        
+        if (queue[i].last_attempt_time != 0 && (now_ms - queue[i].last_attempt_time < backoff_delay)) {
+            continue; 
         }
-        queue[i].last_attempt_time = now_ms; // Deneme zamanini guncelle
-        // ---------------------------------------------
+        queue[i].last_attempt_time = now_ms; 
+        // ------------------------------------------------
 
-#if DEBUG_ENABLED
-        DBG_PRINTF("[SF] retry idx=%d dst=0x%04X msg_id=%08X retries=%u\n",
-                   i,
-                   queue[i].packet.dst_addr,
-                   (unsigned int)queue[i].packet.msg_id,
-                   (unsigned int)queue[i].retry_count);
-#endif
-
-        // Ağa gondermeyi dene (Sadece bir kere calisacak)
         if (send_fn(queue[i].packet)) {
-#if DEBUG_ENABLED
-            DBG_PRINTF("[SF] success, removing idx=%d\n", i);
-#endif
             queue[i].in_use = false;
         } else {
-            // Basarisiz oldu, deneme sayisini artir
             queue[i].retry_count++;
             if (queue[i].retry_count > QUEUE_MAX_RETRIES) {
-#if DEBUG_ENABLED
-                DBG_PRINTF("[SF] dropping idx=%d after %u retries\n",
-                           i, (unsigned int)queue[i].retry_count);
-#endif
                 queue[i].in_use = false;
             }
         }
@@ -142,12 +109,18 @@ void sf_debug_dump(uint32_t now_ms) {
         if (queue[i].in_use) {
             uint32_t age_ms = now_ms - queue[i].enqueue_time;
             DBG_PRINTF("idx: %d | dst: 0x%04X | msg_id: %08X | retries: %d | age: %u ms\n",
-                       i,
-                       queue[i].packet.dst_addr,
-                       (unsigned int)queue[i].packet.msg_id,
-                       queue[i].retry_count,
-                       age_ms);
+                       i, queue[i].packet.dst_addr, (unsigned int)queue[i].packet.msg_id, queue[i].retry_count, age_ms);
         }
     }
 #endif
+}
+
+void mesh_retry_queued_packet(uint16_t dst_addr) {
+    // AODV hedefin rotasını buldu! 
+    // Kuyrukta bu hedefi bekleyen paketlerin Exponential Backoff süresini sıfırla
+    for (int i = 0; i < QUEUE_MAX_MESSAGES; ++i) {
+        if (queue[i].in_use && queue[i].packet.dst_addr == dst_addr) {
+            queue[i].last_attempt_time = 0; // Süreyi sıfırla ki ilk sf_process dönüşünde anında fırlatılsın!
+        }
+    }
 }

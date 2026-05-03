@@ -22,6 +22,8 @@ typedef struct __attribute__((packed)) {
     uint16_t seq_num;      // Per-source packet sequence number
     uint8_t  type;         // DATA / RREQ / RREP / RERR / BEACON / ACK
 
+    int8_t   rssi;
+
     uint8_t  ai_priority;  // 0=LOW, 1=NORMAL, 2=HIGH, 3=CRITICAL
     uint8_t  payload_len;  // Actual payload length in bytes
     uint8_t  payload[MAX_PAYLOAD_LEN];  // Application payload buffer (V1 fixed size)
