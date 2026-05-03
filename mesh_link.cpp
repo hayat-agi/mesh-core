@@ -58,6 +58,11 @@ bool can_send_rreq(uint16_t dst, uint32_t now_ms) {
     return true;
 }
 
+// ACK bekleme süresinde gelen ama ACK olmayan paketleri tutan geçici buffer
+#define SIDE_PKT_BUF_SIZE 4
+static Packet s_side_pkts[SIDE_PKT_BUF_SIZE];
+static uint8_t s_side_pkt_count = 0;
+
 static bool mesh_send_unicast_internal(Packet& p, uint16_t local_addr, uint32_t now_ms, bool allow_enqueue) {
     RouteEntry route;
 
@@ -94,7 +99,8 @@ static bool mesh_send_unicast_internal(Packet& p, uint16_t local_addr, uint32_t 
     p.prev_hop = local_addr;
     p.next_hop = route.next_hop;
 
-    for (int attempt = 0; attempt < MAX_TX_RETRIES; ++attempt) {
+    bool ack_received = false;
+    for (int attempt = 0; attempt < MAX_TX_RETRIES && !ack_received; ++attempt) {
         DBG_PRINTF("[MESH_TX] attempt %d to next=0x%04X\n", attempt + 1, route.next_hop);
 
         if (!lora_send_packet(p)) {
@@ -102,8 +108,19 @@ static bool mesh_send_unicast_internal(Packet& p, uint16_t local_addr, uint32_t 
             continue;
         }
 
-        Packet rx;
-        if (lora_receive_packet(rx, ACK_TIMEOUT_MS)) {
+        // ACK_TIMEOUT_MS süresi içinde sadece ACK'i bekle.
+        // Diğer gelen paketleri hemen işlemek yerine buffer'a al;
+        // çünkü lora_send_packet (TX) henuz bitmiş olabilir ve SX127x'te
+        // RX için tekrar UART döngüsüne girmeyi bekliyoruz.
+        uint32_t ack_deadline = millis() + ACK_TIMEOUT_MS;
+        while ((int32_t)(ack_deadline - millis()) > 0) {
+            Packet rx;
+            uint32_t remaining = (uint32_t)(ack_deadline - millis());
+            if (remaining == 0) break;
+            // Küçük pencerelerle polla — uzun blocking'den kaçın
+            uint32_t poll_ms = (remaining > 50) ? 50 : remaining;
+            if (!lora_receive_packet(rx, poll_ms)) continue;
+
             DBG_PRINTF("[MESH_TX] got packet while waiting for ACK: type=%d src=0x%04X dst=0x%04X msg_id=%08X\n",
                        rx.type, rx.src_addr, rx.dst_addr, (unsigned int)rx.msg_id);
 
@@ -112,15 +129,30 @@ static bool mesh_send_unicast_internal(Packet& p, uint16_t local_addr, uint32_t 
                 rx.src_addr == route.next_hop &&
                 rx.dst_addr == local_addr) {
                 DBG_PRINTLN("[MESH_TX] ACK matched, send success");
-                return true;
+                ack_received = true;
+                break;
             } else {
-                DBG_PRINTLN("[MESH_TX] received packet is not our ACK, handing to mesh_handle_incoming");
-                mesh_handle_incoming(rx, local_addr, millis());
+                // ACK değil — kaybolmasın diye buffer'a al, sonra işle
+                if (s_side_pkt_count < SIDE_PKT_BUF_SIZE) {
+                    s_side_pkts[s_side_pkt_count++] = rx;
+                } else {
+                    DBG_PRINTLN("[MESH_TX] side-packet buffer full, dropping");
+                }
             }
-        } else {
+        }
+
+        if (!ack_received) {
             DBG_PRINTLN("[MESH_TX] ACK timeout expired");
         }
     }
+
+    // ACK döngüsü bitti — önce buffer'daki yan paketleri işle
+    for (uint8_t i = 0; i < s_side_pkt_count; i++) {
+        mesh_handle_incoming(s_side_pkts[i], local_addr, millis());
+    }
+    s_side_pkt_count = 0;
+
+    if (ack_received) return true;
 
     DBG_PRINTLN("[MESH_TX] all retries failed, invalidating route and considering enqueue");
     routing_invalidate(p.dst_addr);

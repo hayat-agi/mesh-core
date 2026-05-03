@@ -344,9 +344,12 @@ private:
         queueTxMessage("MSG_BAD_LEN");
         return;
       }
-      // MSG_OK = accepted by this node; LoRa delivery is not yet confirmed
-      forwardToLoRa(input);
+      // ÖNEMLİ: MSG_OK'yı forwardToLoRa'dan ÖNCE gönder.
+      // forwardToLoRa blocking'dir (ACK_TIMEOUT_MS x MAX_TX_RETRIES = 6sn max),
+      // mobil uygulamanın 5sn responseTimeout'u bu sürede dolup BLE bağlantısını
+      // kesebilir. "MSG_OK" = "mesaj bu node'a ulaştı, LoRa'ya iletilecek" garantisi.
       queueTxMessage("MSG_OK");
+      forwardToLoRa(input);
       return;
     }
 
@@ -389,9 +392,9 @@ private:
         queueTxMessage("MSG_BAD_LEN");
         return;
       }
-      // MSG_OK = accepted by this node; LoRa delivery is not yet confirmed
-      forwardToLoRa(input);
+      // MSG_OK önce gönder (aynı sebep: forwardToLoRa blocking)
       queueTxMessage("MSG_OK");
+      forwardToLoRa(input);
     }
   }
 };
@@ -587,9 +590,8 @@ void loop() {
               if (p.dst_addr == LOCAL_ADDR) {
                   logIncomingAppPayload(p);
               }
-              if (p.dst_addr == LOCAL_ADDR || p.next_hop == LOCAL_ADDR) {
-                  delay(ACK_REPLY_DELAY_MS);
-              }
+              // ACK_REPLY_DELAY_MS artık mesh_link.cpp içinde send_data_ack'te uygulanıyor
+              // Burada ekstra delay olmadan mesh_handle_incoming'e bırakıyoruz
           }
           mesh_handle_incoming(p, LOCAL_ADDR, now_ms);
       }

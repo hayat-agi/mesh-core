@@ -32,8 +32,15 @@ bool lora_send_packet(const Packet& p) {
 
     size_t total_len = serialized_len + 3;
     size_t written = Serial1.write(buf, total_len);
-    Serial1.flush(); 
-    
+    Serial1.flush();
+
+    // TX sonrası RX state machine'i sıfırla.
+    // Modulün TX esnada UART'a döndürebileceği echo/gürültü baytları
+    // bir sonraki alınan paketi bozmamasın diye bufferı temizliyoruz.
+    lora_rx_reset();
+    // TX+state reset arasında gelen geçerli baytları da at (genellikle echo)
+    while (Serial1.available()) Serial1.read();
+
     return (written == total_len);
 }
 
@@ -44,46 +51,54 @@ enum RxState {
     READ_PACKET_BYTES
 };
 
+// Kalıcı RX state machine — çağrılar arasında kısmi alınan baytlar korunur.
+// Böylece ACK polling döngüsünde kısa timeout'larla bile paket kaybı olmaz.
+static RxState  s_rx_state        = WAIT_SOF1;
+static uint8_t  s_rx_buf[128];
+static size_t   s_rx_bytes_read   = 0;
+static uint8_t  s_rx_expected_len = 0;
+
+void lora_rx_reset() {
+    s_rx_state        = WAIT_SOF1;
+    s_rx_bytes_read   = 0;
+    s_rx_expected_len = 0;
+}
+
 bool lora_receive_packet(Packet& out, uint32_t timeout_ms) {
     uint32_t start_time = millis();
-    uint8_t buf[128];
-    size_t bytes_read = 0;
-    uint8_t expected_len = 0;
-    RxState state = WAIT_SOF1;
 
     while ((millis() - start_time) < timeout_ms) {
         if (Serial1.available()) {
             uint8_t c = Serial1.read();
 
-            switch (state) {
+            switch (s_rx_state) {
                 case WAIT_SOF1:
-                    if (c == 0xAA) state = WAIT_SOF2;
+                    if (c == 0xAA) s_rx_state = WAIT_SOF2;
                     break;
                 case WAIT_SOF2:
                     if (c == 0x55) {
-                        state = WAIT_LEN;
+                        s_rx_state = WAIT_LEN;
                     } else if (c == 0xAA) {
-                        state = WAIT_SOF2; 
+                        s_rx_state = WAIT_SOF2;
                     } else {
-                        state = WAIT_SOF1;
+                        s_rx_state = WAIT_SOF1;
                     }
                     break;
                 case WAIT_LEN:
                     if (c == 0 || c > 85) {
-                        state = WAIT_SOF1; 
+                        s_rx_state = WAIT_SOF1;
                     } else {
-                        expected_len = c;
-                        bytes_read = 0;
-                        state = READ_PACKET_BYTES;
+                        s_rx_expected_len = c;
+                        s_rx_bytes_read   = 0;
+                        s_rx_state        = READ_PACKET_BYTES;
                     }
                     break;
                 case READ_PACKET_BYTES:
-                    buf[bytes_read++] = c;
-                    if (bytes_read == expected_len) {
-                        if (packet_deserialize(out, buf, expected_len)) {
-                            return true; // Paket başarıyla ayrıştırıldı!
-                        }
-                        state = WAIT_SOF1;
+                    s_rx_buf[s_rx_bytes_read++] = c;
+                    if (s_rx_bytes_read == s_rx_expected_len) {
+                        bool ok = packet_deserialize(out, s_rx_buf, s_rx_expected_len);
+                        lora_rx_reset(); // Bir sonraki paket için state'i sıfırla
+                        if (ok) return true;
                     }
                     break;
             }

@@ -1,4 +1,7 @@
 #pragma once
+// lora_rx_reset(): RX state machine'i sıfırlar.
+// lora_send_packet'ten sonra stale baytları temizlemek için kullanılabilir.
+void lora_rx_reset();
 #include <Arduino.h>
 #include "mesh_packet.h"
 
