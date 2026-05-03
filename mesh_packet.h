@@ -4,7 +4,10 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#define MAX_PAYLOAD_LEN 64
+// Paket başlığı + payload toplamda LoRa SX127x MTU'suna sığmali (255 byte).
+// Başlık ~13 byte, framing 3 byte => payload için ~239 byte kalıyor.
+// Geniş mesaj + household JSON özelliklerini desteklemek için 200'e çıkarıldı.
+#define MAX_PAYLOAD_LEN 200
 
 // Packet struct as defined in the PRD
 typedef struct __attribute__((packed)) {

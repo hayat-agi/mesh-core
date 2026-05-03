@@ -34,12 +34,10 @@ bool lora_send_packet(const Packet& p) {
     size_t written = Serial1.write(buf, total_len);
     Serial1.flush();
 
-    // TX sonrası RX state machine'i sıfırla.
-    // Modulün TX esnada UART'a döndürebileceği echo/gürültü baytları
-    // bir sonraki alınan paketi bozmamasın diye bufferı temizliyoruz.
+    // TX sonrası sadece state machine'i sıfırla — UART FIFO'daki baytları SILME.
+    // RREP/ACK paketi hemen arkadan gelebilir; silinirse route bulunamaz,
+    // store-forward döngüye girer, yüksek akım → Brownout tetikler.
     lora_rx_reset();
-    // TX+state reset arasında gelen geçerli baytları da at (genellikle echo)
-    while (Serial1.available()) Serial1.read();
 
     return (written == total_len);
 }

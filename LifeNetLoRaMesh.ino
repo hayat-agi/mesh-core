@@ -335,19 +335,45 @@ private:
     Serial.printf("[CMD] \"%s\"\n", input.c_str());
 
     // 0. Binary passthrough — skip all text-command checks
-    bool isBinary = (!input.empty() && (uint8_t)input[0] == 0xD0)
-                 || (input.size() >= 4 && input.substr(0, 4) == "BIN:");
-    if (isBinary) {
+    // Mobil uygulama ham binary'yi "BIN:<hex>" olarak gönderiyor.
+    // "BIN:" prefix'ini tespit et, hex'i decode et ve ham binary olarak ilet.
+    if (input.size() >= 4 && input.substr(0, 4) == "BIN:") {
+      // Hex decode
+      const std::string hexStr = input.substr(4);
+      std::string binary;
+      binary.reserve(hexStr.size() / 2);
+      for (size_t i = 0; i + 1 < hexStr.size(); i += 2) {
+        char hi = hexStr[i], lo = hexStr[i + 1];
+        auto hexVal = [](char c) -> uint8_t {
+          if (c >= '0' && c <= '9') return c - '0';
+          if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+          if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+          return 0;
+        };
+        binary += (char)((hexVal(hi) << 4) | hexVal(lo));
+      }
+      if (binary.size() > MAX_PAYLOAD_LEN) {
+        Serial.printf("[CMD] Payload too large (%u > %u) — rejecting\n",
+                      (unsigned)binary.size(), (unsigned)MAX_PAYLOAD_LEN);
+        queueTxMessage("MSG_BAD_LEN");
+        return;
+      }
+      Serial.printf("[CMD] BIN decoded: %u bytes, first=0x%02X\n",
+                    (unsigned)binary.size(), binary.empty() ? 0 : (uint8_t)binary[0]);
+      queueTxMessage("MSG_OK");
+      forwardToLoRa(binary);   // ham binary string olarak gönder
+      return;
+    }
+
+    // Raw 0xD0-prefixed binary (eski/direkt yol — BLE bazı platformlarda
+    // doğrudan binary gönderebilir)
+    if (!input.empty() && (uint8_t)input[0] == 0xD0) {
       if (input.size() > MAX_PAYLOAD_LEN) {
         Serial.printf("[CMD] Payload too large (%u > %u) — rejecting\n",
                       (unsigned)input.size(), (unsigned)MAX_PAYLOAD_LEN);
         queueTxMessage("MSG_BAD_LEN");
         return;
       }
-      // ÖNEMLİ: MSG_OK'yı forwardToLoRa'dan ÖNCE gönder.
-      // forwardToLoRa blocking'dir (ACK_TIMEOUT_MS x MAX_TX_RETRIES = 6sn max),
-      // mobil uygulamanın 5sn responseTimeout'u bu sürede dolup BLE bağlantısını
-      // kesebilir. "MSG_OK" = "mesaj bu node'a ulaştı, LoRa'ya iletilecek" garantisi.
       queueTxMessage("MSG_OK");
       forwardToLoRa(input);
       return;
