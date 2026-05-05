@@ -712,6 +712,14 @@ void loop() {
                       uint8_t msgLen = p.payload[5];
                       std::string msgText((const char*)&p.payload[6], msgLen);
                       gatewayUplink(p, msgText);
+                  } else if (p.payload_len > 0) {
+                      // Non-v4 payload (CLI 's' test, plain text, range probes) —
+                      // uplink as raw text so distance/hop tests surface in the
+                      // command center too. Backend records it as a normal mesh
+                      // alert with text=<raw payload>.
+                      Serial.println("[APP_RX] non-v4 payload, uplinking as raw text");
+                      std::string msgText((const char*)p.payload, p.payload_len);
+                      gatewayUplink(p, msgText);
                   }
 #endif
               }
