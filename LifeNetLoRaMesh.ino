@@ -4,6 +4,27 @@
 #include <string>
 #include <NimBLEDevice.h>
 
+// ─── Gateway Uplink Config ──────────────────────────────────────────────────
+//
+//  IS_GATEWAY = 1 SADECE Node 4'te aktif.
+//  Node 2'de 0 olarak birak; WiFi/HTTP hic derlenmez.
+//
+#define IS_GATEWAY  1    // 1 = bu node backend'e gonderir | 0 = siradan node
+
+#if IS_GATEWAY
+  #include <WiFi.h>
+  #include <HTTPClient.h>
+
+  // -- Sadece bu bolumu degistir -----------------------------------------
+  #define WIFI_SSID    "Berkay"         // ag adiniz
+  #define WIFI_PASS    "brky1234"     // ag sifreniz
+  #define BACKEND_IP   "192.168.1.107"    // bilgisayarin LAN IP'si
+  #define BACKEND_PORT  5000
+  #define GATEWAY_ID   "B0:CB:D8:EE:7E:46"        // backend'deki gateway id
+  // -----------------------------------------------------------------------
+#endif
+
+
 #include "mesh_packet.h"
 #include "lora_link.h"
 #include "routing.h"
@@ -186,6 +207,62 @@ static void logIncomingAppPayload(const Packet& p) {
   }
 }
 
+// ─── Gateway WiFi Uplink ─────────────────────────────────────────────────────
+//  Sadece IS_GATEWAY=1 olan node'da derlenir.
+//  Disaster v4 paketi mesh üzerinden gelince backend'e HTTP POST atar.
+#if IS_GATEWAY
+static void gatewayUplink(const Packet& p, const std::string& msgText) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[UPLINK] WiFi yok, atlaniyor");
+    return;
+  }
+
+  // JSON body oluştur (ArduinoJson yerine elle — bağımlılık azaltır)
+  char body[512];
+  char hexSrc[8];
+  snprintf(hexSrc, sizeof(hexSrc), "0x%04X", p.src_addr);
+
+  // msgText içindeki çift tırnakları ve backslash'ları escape et
+  std::string safeMsg;
+  for (char c : msgText) {
+    if (c == '"')        safeMsg += "\\\"";
+    else if (c == '\\') safeMsg += "\\\\";
+    else                 safeMsg += c;
+  }
+
+  snprintf(body, sizeof(body),
+    "{\"type\":\"manual_message\","
+    "\"message\":\"%s\","
+    "\"sentAt\":\"%lu\","
+    "\"source\":\"mesh\","
+    "\"meshHops\":%u,"
+    "\"meshSrcAddr\":\"%s\","
+    "\"meshMsgId\":\"%X\"}",
+    safeMsg.c_str(),
+    (unsigned long)millis(),
+    (unsigned)p.hop_count,
+    hexSrc,
+    (unsigned int)p.msg_id
+  );
+
+  char url[128];
+  snprintf(url, sizeof(url),
+    "http://%s:%u/api/gateways/%s/disaster-events",
+    BACKEND_IP, (unsigned)BACKEND_PORT, GATEWAY_ID);
+
+  HTTPClient http;
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-Source",   "mesh-uplink");
+  http.addHeader("X-Mesh-Hops", String(p.hop_count));
+  http.addHeader("X-Mesh-Src",  hexSrc);
+  http.addHeader("X-Mesh-MsgId", String(p.msg_id, HEX));
+
+  int code = http.POST(String(body));
+  Serial.printf("[UPLINK] POST %s -> HTTP %d\n", url, code);
+  http.end();
+}
+#endif
 // ─── LoRa'ya forward helper ────────────────────────────────────────────────
 
 static void forwardToLoRa(const std::string& msg) {
@@ -489,6 +566,23 @@ void setup() {
   dupdet_init();
   sf_init();
 
+#if IS_GATEWAY
+  // WiFi bağlantısı — backend uplink için gerekli
+  Serial.printf("[WiFi] Connecting to %s ...\n", WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  uint32_t wifiStart = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiStart < 15000) {
+    delay(500);
+    Serial.print('.');
+  }
+  Serial.println();
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.printf("[WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+  } else {
+    Serial.println("[WiFi] Connection FAILED — uplink disabled until reconnect");
+  }
+#endif
+
   uint32_t now = millis();
   routing_add_or_update(
       GATEWAY_ADDR,
@@ -612,6 +706,14 @@ void loop() {
           if (p.type == PACKET_TYPE_DATA) {
               if (p.dst_addr == LOCAL_ADDR) {
                   logIncomingAppPayload(p);
+#if IS_GATEWAY
+                  // Disaster v4 paketi mi? Varsa backend'e ilet.
+                  if (p.payload_len >= 9 && p.payload[0] == 0xD0) {
+                      uint8_t msgLen = p.payload[5];
+                      std::string msgText((const char*)&p.payload[6], msgLen);
+                      gatewayUplink(p, msgText);
+                  }
+#endif
               }
               // ACK_REPLY_DELAY_MS artık mesh_link.cpp içinde send_data_ack'te uygulanıyor
               // Burada ekstra delay olmadan mesh_handle_incoming'e bırakıyoruz

@@ -34,9 +34,21 @@ bool lora_send_packet(const Packet& p) {
     size_t written = Serial1.write(buf, total_len);
     Serial1.flush();
 
-    // TX sonrası sadece state machine'i sıfırla — UART FIFO'daki baytları SILME.
-    // RREP/ACK paketi hemen arkadan gelebilir; silinirse route bulunamaz,
-    // store-forward döngüye girer, yüksek akım → Brownout tetikler.
+    // LoRa modülü RF TX'i tamamlayana kadar bekle.
+    // AUX pini varsa (HIGH = hazır) onu kullan, yoksa sabit süre bekle.
+    // 9600 baud + RF overhead: tipik 50-120ms.
+    if (LORA_AUX_PIN >= 0) {
+        uint32_t t = millis();
+        while (digitalRead(LORA_AUX_PIN) == LOW && (millis() - t) < 200) {
+            delay(1);
+        }
+        delay(5);  // stabilizasyon
+    } else {
+        delay(60); // AUX pini yok: sabit bekleme
+    }
+
+    // TX tamamlandı: RX state machine'i sıfırla.
+    // FIFO'yu temizlemiyoruz — gerçek gelen paketler korunuyor.
     lora_rx_reset();
 
     return (written == total_len);

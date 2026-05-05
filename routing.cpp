@@ -114,6 +114,9 @@ ControlAction handle_rreq(Packet& p, uint16_t local_addr, uint32_t now_ms) {
     action.type = CTRL_DROP;
     action.next_hop = 0;
 
+    // Kendi yayınladığımız RREQ'i echo olarak alabiliyoruz — yoksay.
+    if (p.src_addr == local_addr) return action;
+
     if (dupdet_is_duplicate(p.msg_id, p.src_addr)) return action;
 
     uint8_t new_hop_count = p.hop_count + 1;
@@ -145,6 +148,14 @@ ControlAction handle_rrep(Packet& p, uint16_t local_addr, uint32_t now_ms) {
     ControlAction action;
     action.type = CTRL_DROP;
     action.next_hop = 0;
+
+    // Güvenlik: kendi adresimizden gelen RREP'i yoksay.
+    // Bu durum genellikle kendi RREQ'imizin echo olarak geri dönmesi ve
+    // yanlış type parse edilmesinden kaynaklanır.
+    if (p.src_addr == local_addr) {
+        DBG_PRINTF("[ROUTING] RREP from self (0x%04X) ignored\n", p.src_addr);
+        return action;
+    }
 
     if (dupdet_is_duplicate(p.msg_id, p.src_addr)) return action;
 

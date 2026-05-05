@@ -1,9 +1,15 @@
 #pragma once
-// lora_rx_reset(): RX state machine'i sıfırlar.
-// lora_send_packet'ten sonra stale baytları temizlemek için kullanılabilir.
-void lora_rx_reset();
 #include <Arduino.h>
 #include "mesh_packet.h"
+
+// ── PCB (Node 2 / Node 4) pin tanımları ──────────────────
+// Bu node'larda AUX pini bağlı değil; -1 vererek AUX beklemeyi devre dışı bırak.
+#ifndef LORA_AUX_PIN
+#define LORA_AUX_PIN  (-1)   // -1 = AUX pini yok, sabit 60ms bekle
+#endif
+
+// lora_rx_reset(): RX state machine'i sıfırlar.
+void lora_rx_reset();
 
 void lora_init();
 
