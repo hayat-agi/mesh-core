@@ -686,7 +686,12 @@ void loop() {
               Packet rrep;
               packet_init(rrep);
               rrep.msg_id = esp_random();
-              rrep.src_addr = LOCAL_ADDR;
+              // RREP src_addr = RREQ'te aranan asıl hedef (RFC 3561). Önce
+              // her durumda LOCAL_ADDR vardı; ara node case'de Node 2 yanlış
+              // hedefe (relay'in kendisine) route kuruyordu, multi-hop bu
+              // yüzden bozuktu. Hedef bizsek p.dst_addr==LOCAL_ADDR olur,
+              // davranış aynı kalır; ara node'sak gerçek hedefi gösterir.
+              rrep.src_addr = p.dst_addr;
               rrep.dst_addr = p.src_addr;
               rrep.prev_hop = LOCAL_ADDR;
               rrep.next_hop = action.next_hop;
