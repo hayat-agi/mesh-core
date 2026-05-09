@@ -161,45 +161,85 @@ static bool loraAuxBaseline() {
   return aux == HIGH;
 }
 
-// ── 5. LoRa parameter readback ──────────────────────────────────────────────
+// ── 5. LoRa parameter readback (multi-baud sweep) ───────────────────────────
 
-static bool loraParamReadback() {
-  Serial.println("\n[5/5] LoRa E22 parameter readback (mode 3 — sleep/config):");
-
-  Serial1.begin(9600, SERIAL_8N1, PIN_LORA_RX, PIN_LORA_TX);
-
-  digitalWrite(PIN_LORA_M0, HIGH);
-  digitalWrite(PIN_LORA_M1, HIGH);
-  delay(200);
+static bool tryRoundtrip(uint32_t baud, const uint8_t* cmd, const char* cmdName) {
+  Serial1.end();
+  Serial1.begin(baud, SERIAL_8N1, PIN_LORA_RX, PIN_LORA_TX);
+  delay(80);
 
   while (Serial1.available()) Serial1.read();
 
-  // E22-900T22D parameter read: 0xC1 0xC1 0xC1 → returns config bytes
-  uint8_t cmd[3] = { 0xC1, 0xC1, 0xC1 };
   Serial1.write(cmd, 3);
   Serial1.flush();
 
   uint8_t resp[16];
   size_t n = 0;
   uint32_t start = millis();
-  while (millis() - start < 500 && n < sizeof(resp)) {
-    if (Serial1.available()) {
-      resp[n++] = Serial1.read();
-    }
+  while (millis() - start < 350 && n < sizeof(resp)) {
+    if (Serial1.available()) resp[n++] = Serial1.read();
   }
 
-  Serial.printf("    -> received %u bytes:", (unsigned)n);
+  Serial.printf("       %lu baud / %s -> %u bytes:",
+                (unsigned long)baud, cmdName, (unsigned)n);
   for (size_t i = 0; i < n; i++) Serial.printf(" %02X", resp[i]);
   Serial.println();
+
+  // Accept anything that looks like a real frame (>=4 bytes, sane header).
+  return n >= 4 && (resp[0] == 0xC1 || resp[0] == 0xC0 || resp[0] == 0xC3);
+}
+
+static bool loraParamReadback() {
+  Serial.println("\n[5/5] LoRa E22 UART roundtrip (mode 3 — multi-baud sweep):");
+
+  digitalWrite(PIN_LORA_M0, HIGH);
+  digitalWrite(PIN_LORA_M1, HIGH);
+  delay(200);
+
+  // Wait for AUX to settle HIGH after mode change. Some E22 variants pulse
+  // AUX low while transitioning; sending before AUX is HIGH gets ignored.
+  uint32_t auxStart = millis();
+  while (digitalRead(PIN_LORA_AUX) == LOW && millis() - auxStart < 500) {
+    delay(5);
+  }
+  Serial.printf("    -> AUX after mode 3: %s\n",
+                digitalRead(PIN_LORA_AUX) ? "HIGH" : "LOW (still busy)");
+
+  uint32_t bauds[] = { 9600, 115200, 57600, 38400, 19200, 4800, 2400 };
+  uint8_t cmdParams[3]  = { 0xC1, 0xC1, 0xC1 };
+  uint8_t cmdVersion[3] = { 0xC3, 0xC3, 0xC3 };
+
+  bool ok = false;
+  uint32_t hitBaud = 0;
+  const char* hitCmd = nullptr;
+
+  for (size_t b = 0; b < sizeof(bauds)/sizeof(bauds[0]) && !ok; b++) {
+    Serial.printf("    -- @ %lu baud --\n", (unsigned long)bauds[b]);
+    if (tryRoundtrip(bauds[b], cmdParams, "params (0xC1x3)")) {
+      ok = true; hitBaud = bauds[b]; hitCmd = "params";
+      break;
+    }
+    if (tryRoundtrip(bauds[b], cmdVersion, "version (0xC3x3)")) {
+      ok = true; hitBaud = bauds[b]; hitCmd = "version";
+      break;
+    }
+  }
 
   // Restore normal mode
   digitalWrite(PIN_LORA_M0, LOW);
   digitalWrite(PIN_LORA_M1, LOW);
 
-  // Valid response is >= 6 bytes starting with 0xC1 (newer fw) or 0xC0 (older).
-  bool ok = (n >= 6 && (resp[0] == 0xC1 || resp[0] == 0xC0));
-  recordResult("Parameter roundtrip (UART TX/RX + M0/M1 + power)", ok,
-               "TX<->RX swap, baud mismatch, missing VCC, or M0/M1 stuck");
+  if (ok) {
+    Serial.printf("    -> module responded at %lu baud (%s)\n",
+                  (unsigned long)hitBaud, hitCmd);
+    if (hitBaud != 9600) {
+      Serial.printf("    -> WARNING: main firmware uses 9600 baud. "
+                    "Either reflash module to 9600 or change Serial1.begin() rate.\n");
+    }
+  }
+
+  recordResult("UART roundtrip across baud sweep", ok,
+               "no response at any baud — TX/RX wiring, dead module, or both");
   return ok;
 }
 
