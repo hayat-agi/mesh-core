@@ -161,16 +161,17 @@ static bool loraAuxBaseline() {
   return aux == HIGH;
 }
 
-// ── 5. LoRa parameter readback (multi-baud sweep) ───────────────────────────
+// ── 5. LoRa parameter readback (wire check + multi-baud sweep) ──────────────
 
-static bool tryRoundtrip(uint32_t baud, const uint8_t* cmd, const char* cmdName) {
+static bool tryRoundtrip(uint32_t baud, const uint8_t* cmd, size_t cmdLen,
+                         const char* cmdName) {
   Serial1.end();
   Serial1.begin(baud, SERIAL_8N1, PIN_LORA_RX, PIN_LORA_TX);
   delay(80);
 
   while (Serial1.available()) Serial1.read();
 
-  Serial1.write(cmd, 3);
+  Serial1.write(cmd, cmdLen);
   Serial1.flush();
 
   uint8_t resp[16];
@@ -185,8 +186,9 @@ static bool tryRoundtrip(uint32_t baud, const uint8_t* cmd, const char* cmdName)
   for (size_t i = 0; i < n; i++) Serial.printf(" %02X", resp[i]);
   Serial.println();
 
-  // Accept anything that looks like a real frame (>=4 bytes, sane header).
-  return n >= 4 && (resp[0] == 0xC1 || resp[0] == 0xC0 || resp[0] == 0xC3);
+  // Real reply: header byte 0xC0/C1/C3 AND length > what we sent (rules out
+  // ESP-side phantom echo where n == cmdLen).
+  return n > cmdLen && (resp[0] == 0xC1 || resp[0] == 0xC0 || resp[0] == 0xC3);
 }
 
 static bool loraParamReadback() {
@@ -205,8 +207,34 @@ static bool loraParamReadback() {
   Serial.printf("    -> AUX after mode 3: %s\n",
                 digitalRead(PIN_LORA_AUX) ? "HIGH" : "LOW (still busy)");
 
+  // Wire check: is the module's TXD actually driving the RX line?
+  // Pull GPIO 16 LOW internally; if module TXD is connected and idle (UART
+  // convention = idle high), it'll override the pull-down and we read HIGH.
+  // If the wire is missing, the pull-down wins and we read LOW.
+  pinMode(PIN_LORA_RX, INPUT_PULLDOWN);
+  delay(20);
+  int rxIdle = digitalRead(PIN_LORA_RX);
+  Serial.printf("    -> RX line w/ internal pulldown: %s\n",
+                rxIdle ? "HIGH (module TXD is driving the line — wire OK)"
+                       : "LOW (line floats — module TXD pin is NOT connected to GPIO 16)");
+
+  if (!rxIdle) {
+    digitalWrite(PIN_LORA_M0, LOW);
+    digitalWrite(PIN_LORA_M1, LOW);
+    recordResult("UART roundtrip", false,
+                 "ESP RX (GPIO 16) is floating — connect module TXD pin to GPIO 16");
+    return false;
+  }
+
+  // Restore RX as a normal input (Serial1.begin will configure as UART RX).
+  pinMode(PIN_LORA_RX, INPUT);
+
   uint32_t bauds[] = { 9600, 115200, 57600, 38400, 19200, 4800, 2400 };
-  uint8_t cmdParams[3]  = { 0xC1, 0xC1, 0xC1 };
+
+  // E22-900T22D actual parameter-read uses 3-byte form: C1 + start_addr + length.
+  // C1 C1 C1 is older-firmware / E32-style and may be ignored on D-variant.
+  uint8_t cmdReadParams[3] = { 0xC1, 0x00, 0x09 };  // read 9 config bytes from offset 0
+  uint8_t cmdLegacyParams[3] = { 0xC1, 0xC1, 0xC1 };
   uint8_t cmdVersion[3] = { 0xC3, 0xC3, 0xC3 };
 
   bool ok = false;
@@ -215,13 +243,14 @@ static bool loraParamReadback() {
 
   for (size_t b = 0; b < sizeof(bauds)/sizeof(bauds[0]) && !ok; b++) {
     Serial.printf("    -- @ %lu baud --\n", (unsigned long)bauds[b]);
-    if (tryRoundtrip(bauds[b], cmdParams, "params (0xC1x3)")) {
-      ok = true; hitBaud = bauds[b]; hitCmd = "params";
-      break;
+    if (tryRoundtrip(bauds[b], cmdReadParams, 3, "params E22 (C1 00 09)")) {
+      ok = true; hitBaud = bauds[b]; hitCmd = "params-E22"; break;
     }
-    if (tryRoundtrip(bauds[b], cmdVersion, "version (0xC3x3)")) {
-      ok = true; hitBaud = bauds[b]; hitCmd = "version";
-      break;
+    if (tryRoundtrip(bauds[b], cmdLegacyParams, 3, "params legacy (C1x3)")) {
+      ok = true; hitBaud = bauds[b]; hitCmd = "params-legacy"; break;
+    }
+    if (tryRoundtrip(bauds[b], cmdVersion, 3, "version (C3x3)")) {
+      ok = true; hitBaud = bauds[b]; hitCmd = "version"; break;
     }
   }
 
