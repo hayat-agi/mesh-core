@@ -1,11 +1,12 @@
 #include "lora_link.h"
 #include <Arduino.h>
 
-// PRD Section 1: Hardware Mapping
-#define LORA_TX_PIN 27  // ESP32 TX1 (connected to module RX)
-#define LORA_RX_PIN 35  // ESP32 RX1 (connected to module TX)
-#define LORA_M0_PIN 32
-#define LORA_M1_PIN 33
+// Breadboard prototype pin mapping (LoRa E22 + MPU6050 + ESP32-WROOM 30-pin).
+// MPU6050 sits on I2C GPIO 32 (SDA) / 33 (SCL), so M0/M1 moved off those pins.
+#define LORA_TX_PIN 17  // ESP32 TX1 → module RXD
+#define LORA_RX_PIN 16  // ESP32 RX1 ← module TXD
+#define LORA_M0_PIN 25
+#define LORA_M1_PIN 26
 
 void lora_init() {
     pinMode(LORA_M0_PIN, OUTPUT);

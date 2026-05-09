@@ -2,10 +2,10 @@
 #include <Arduino.h>
 #include "mesh_packet.h"
 
-// ── PCB (Node 2 / Node 4) pin tanımları ──────────────────
-// Bu node'larda AUX pini bağlı değil; -1 vererek AUX beklemeyi devre dışı bırak.
+// ── Breadboard prototype pin tanımları ──────────────────
+// AUX pini GPIO 4'e bağlı; lora_send_packet TX-complete handshake'i kullanır.
 #ifndef LORA_AUX_PIN
-#define LORA_AUX_PIN  (-1)   // -1 = AUX pini yok, sabit 60ms bekle
+#define LORA_AUX_PIN  4   // GPIO 4 = AUX from LoRa E22 module
 #endif
 
 // lora_rx_reset(): RX state machine'i sıfırlar.
