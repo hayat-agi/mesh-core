@@ -21,6 +21,12 @@
   #define BACKEND_IP   "192.168.1.107"    // bilgisayarin LAN IP'si
   #define BACKEND_PORT  5000
   #define GATEWAY_ID   "B0:CB:D8:EE:7E:46"        // backend'deki gateway id
+  // Heartbeat — backend liveness telemetry. Token must match
+  // GATEWAY_HEARTBEAT_TOKEN on the server. 30s cadence; 90s server timeout
+  // → missing 3 in a row marks the gateway inactive.
+  #define HEARTBEAT_TOKEN        "local-dev-heartbeat-7c8e2a4f6b1d3e5a9c0b2d4f6a8c0e2b"
+  #define HEARTBEAT_INTERVAL_MS  30000
+  #define HEARTBEAT_FW_VERSION   "v1.0.0"
   // -----------------------------------------------------------------------
 #endif
 
@@ -260,6 +266,51 @@ static void gatewayUplink(const Packet& p, const std::string& msgText) {
 
   int code = http.POST(String(body));
   Serial.printf("[UPLINK] POST %s -> HTTP %d\n", url, code);
+  http.end();
+}
+
+// Periodic liveness telemetry → backend. Sends battery%, WiFi RSSI and
+// firmware version; backend flips status to active/low_battery and
+// freshens last_seen. Without this the liveness watcher will mark the
+// gateway inactive ~90s after boot.
+//
+// SerialNumber is the WiFi MAC, which must match what was registered via
+// the mobile gateway-create flow. Battery is hardcoded 100% pending an
+// ADC-based measurement on the actual battery rail.
+static void sendHeartbeat() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[HB] WiFi yok, atlaniyor");
+    return;
+  }
+
+  int rssi = WiFi.RSSI();
+  int batteryPct = 100;  // TODO: read real battery via ADC on power circuit
+
+  char body[256];
+  snprintf(body, sizeof(body),
+    "{\"serialNumber\":\"%s\","
+    "\"battery\":%d,"
+    "\"signal_rssi\":%d,"
+    "\"firmware_version\":\"%s\"}",
+    WiFi.macAddress().c_str(),
+    batteryPct,
+    rssi,
+    HEARTBEAT_FW_VERSION
+  );
+
+  char url[128];
+  snprintf(url, sizeof(url),
+    "http://%s:%u/api/gateways/heartbeat",
+    BACKEND_IP, (unsigned)BACKEND_PORT);
+
+  HTTPClient http;
+  http.begin(url);
+  http.addHeader("Content-Type", "application/json");
+  http.addHeader("X-Device-Token", HEARTBEAT_TOKEN);
+
+  int code = http.POST(String(body));
+  Serial.printf("[HB] POST %s -> HTTP %d (battery=%d%%, rssi=%ddBm)\n",
+                url, code, batteryPct, rssi);
   http.end();
 }
 #endif
@@ -578,6 +629,9 @@ void setup() {
   Serial.println();
   if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("[WiFi] Connected! IP: %s\n", WiFi.localIP().toString().c_str());
+    // Fire one heartbeat immediately so the gateway becomes "active" on
+    // boot rather than waiting up to HEARTBEAT_INTERVAL_MS.
+    sendHeartbeat();
   } else {
     Serial.println("[WiFi] Connection FAILED — uplink disabled until reconnect");
   }
@@ -658,6 +712,15 @@ void loop() {
       last_hb = now_ms;
       DBG_PRINTF("[HB] Node alive, millis=%u\n", now_ms);
   }
+
+#if IS_GATEWAY
+  // Backend liveness telemetry — see sendHeartbeat() above.
+  static uint32_t lastWifiHeartbeat = 0;
+  if (now_ms - lastWifiHeartbeat >= HEARTBEAT_INTERVAL_MS) {
+      lastWifiHeartbeat = now_ms;
+      sendHeartbeat();
+  }
+#endif
 
   // Try to receive a packet with a small timeout to not block too long
   if (lora_receive_packet(p, 50)) {
