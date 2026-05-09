@@ -311,11 +311,19 @@ static bool loraParamReadback() {
 // ── Setup ───────────────────────────────────────────────────────────────────
 
 void setup() {
+  // Drop CPU to 80 MHz to reduce baseline current draw on the 3V3 rail.
+  // Compact ESP32 boards (LOLIN32 Lite etc.) have no VIN pin and a small
+  // LDO; running at 240 MHz can starve the LoRa module during config TX
+  // and trigger brownout resets. 80 MHz roughly halves CPU current.
+  setCpuFrequencyMhz(80);
+
   Serial.begin(115200);
   delay(800);
   Serial.println("\n=========================================");
   Serial.println("  Hayat Agi — Breadboard Pin Wiring Check");
   Serial.println("=========================================");
+  Serial.printf("  CPU clock: %u MHz (lowered for power)\n",
+                (unsigned)getCpuFrequencyMhz());
   Serial.println("  LoRa E22:  TX=17  RX=16  M0=25  M1=26  AUX=4");
   Serial.println("  MPU6050:   SDA=32 SCL=33");
   Serial.println("  Power:     both modules from 3V3 + GND");
