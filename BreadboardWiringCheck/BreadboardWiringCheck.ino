@@ -254,6 +254,42 @@ static bool loraParamReadback() {
     }
   }
 
+  // If 8N1 sweep failed, try alternate UART formats at 9600 only — the
+  // observation that 9600+C1 00 09 returned 4 bytes (FF FF FF FF) but other
+  // bauds returned 0 suggests the module IS responding at 9600, but our
+  // 8N1 framing doesn't match its configured format → every received byte
+  // becomes a framing error and reads as 0xFF.
+  if (!ok) {
+    Serial.println("    -- alternate UART formats @ 9600 --");
+    struct Fmt { uint32_t cfg; const char* name; };
+    Fmt fmts[] = {
+      { SERIAL_8N2, "8N2" },
+      { SERIAL_8E1, "8E1" },
+      { SERIAL_8O1, "8O1" },
+      { SERIAL_8E2, "8E2" },
+    };
+    for (size_t f = 0; f < sizeof(fmts)/sizeof(fmts[0]) && !ok; f++) {
+      Serial1.end();
+      Serial1.begin(9600, fmts[f].cfg, PIN_LORA_RX, PIN_LORA_TX);
+      delay(80);
+      while (Serial1.available()) Serial1.read();
+      Serial1.write(cmdReadParams, 3);
+      Serial1.flush();
+      uint8_t resp[16];
+      size_t n = 0;
+      uint32_t start = millis();
+      while (millis() - start < 350 && n < sizeof(resp)) {
+        if (Serial1.available()) resp[n++] = Serial1.read();
+      }
+      Serial.printf("       9600 / %s / C1 00 09 -> %u bytes:", fmts[f].name, (unsigned)n);
+      for (size_t i = 0; i < n; i++) Serial.printf(" %02X", resp[i]);
+      Serial.println();
+      if (n > 3 && (resp[0] == 0xC1 || resp[0] == 0xC0 || resp[0] == 0xC3)) {
+        ok = true; hitBaud = 9600; hitCmd = fmts[f].name;
+      }
+    }
+  }
+
   // Restore normal mode
   digitalWrite(PIN_LORA_M0, LOW);
   digitalWrite(PIN_LORA_M1, LOW);
