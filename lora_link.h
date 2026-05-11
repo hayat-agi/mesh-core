@@ -5,7 +5,7 @@
 // ── PCB (Node 2 / Node 4) pin tanımları ──────────────────
 // Bu node'larda AUX pini bağlı değil; -1 vererek AUX beklemeyi devre dışı bırak.
 #ifndef LORA_AUX_PIN
-#define LORA_AUX_PIN  (-1)   // -1 = AUX pini yok, sabit 60ms bekle
+#define LORA_AUX_PIN  4      // Breadboard: ESP32 Pin 4 -> LoRa AUX
 #endif
 
 // lora_rx_reset(): RX state machine'i sıfırlar.

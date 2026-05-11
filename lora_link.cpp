@@ -2,12 +2,15 @@
 #include <Arduino.h>
 
 // PRD Section 1: Hardware Mapping
-#define LORA_TX_PIN 27  // ESP32 TX1 (connected to module RX)
-#define LORA_RX_PIN 35  // ESP32 RX1 (connected to module TX)
-#define LORA_M0_PIN 32
-#define LORA_M1_PIN 33
+#define LORA_TX_PIN 17  // ESP32 TX (connected to module RXD)
+#define LORA_RX_PIN 16  // ESP32 RX (connected to module TXD)
+#define LORA_M0_PIN 25
+#define LORA_M1_PIN 26
 
 void lora_init() {
+    if (LORA_AUX_PIN >= 0) {
+        pinMode(LORA_AUX_PIN, INPUT);
+    }
     pinMode(LORA_M0_PIN, OUTPUT);
     pinMode(LORA_M1_PIN, OUTPUT);
 
