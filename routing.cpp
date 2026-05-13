@@ -5,7 +5,8 @@
 
 #define ROUTE_LIFETIME_MS 3600000
 
-extern void mesh_retry_queued_packet(uint16_t dst_addr);
+// mesh_link.h'daki gercek imzayla eslestirildi — onceki void/uint16_t imzasi UB'ye yol aciyordu.
+#include "mesh_link.h"
 
 static RouteEntry routing_table[ROUTING_TABLE_SIZE];
 
@@ -18,7 +19,13 @@ void routing_init() {
 void routing_purge_expired(uint32_t now_ms) {
     for (int i = 0; i < ROUTING_TABLE_SIZE; ++i) {
         if (routing_table[i].in_use) {
+            // lifetime, son-gecerli-zaman (absolute ms) olarak saklanıyor.
+            // (int32_t) cast'i millis() 49.7 gunluk overflow'unda da dogru calisir
+            // cunku isaretli fark her iki yone de en fazla ~24.8 gun tasir.
+            // Kural: now_ms >= lifetime ise sure doldu.
             if ((int32_t)(now_ms - routing_table[i].lifetime) >= 0) {
+                DBG_PRINTF("[ROUTING] purge dst=0x%04X lifetime expired\n",
+                           routing_table[i].destination);
                 routing_table[i].in_use = false;
             }
         }
@@ -164,7 +171,10 @@ ControlAction handle_rrep(Packet& p, uint16_t local_addr, uint32_t now_ms) {
 
     if (p.dst_addr == local_addr) {
         DBG_PRINTF("[ROUTING] RREP received! Route established to 0x%04X\n", p.src_addr);
-        mesh_retry_queued_packet(p.src_addr); 
+        // store_forward kuyrugundaki bekleyen paketlerin backoff'unu sifirla
+        // (sf_process bir sonraki donuste aninda yeniden dener)
+        extern void sf_reset_backoff_for_dst(uint16_t dst_addr);
+        sf_reset_backoff_for_dst(p.src_addr);
         return action; 
     }
 

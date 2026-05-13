@@ -115,12 +115,17 @@ void sf_debug_dump(uint32_t now_ms) {
 #endif
 }
 
-void mesh_retry_queued_packet(uint16_t dst_addr) {
-    // AODV hedefin rotasını buldu! 
-    // Kuyrukta bu hedefi bekleyen paketlerin Exponential Backoff süresini sıfırla
+// sf_reset_backoff_for_dst: RREP alındığında routing.cpp tarafından çağrılır.
+// Kuyrukta bu hedefe ait paketlerin exponential backoff sayacını sıfırlar;
+// böylece sf_process bir sonraki döngüde yeniden deneme yapar.
+// NOT: eskiden mesh_retry_queued_packet(uint16_t) adıyla tanımlıydı;
+//      mesh_link.h'daki bool mesh_retry_queued_packet(Packet&, uint16_t, uint32_t)
+//      ile imza çakışması UB'ye (tanımsız davranışa) yol açıyordu — yeniden adlandırıldı.
+void sf_reset_backoff_for_dst(uint16_t dst_addr) {
     for (int i = 0; i < QUEUE_MAX_MESSAGES; ++i) {
         if (queue[i].in_use && queue[i].packet.dst_addr == dst_addr) {
-            queue[i].last_attempt_time = 0; // Süreyi sıfırla ki ilk sf_process dönüşünde anında fırlatılsın!
+            queue[i].last_attempt_time = 0;
+            DBG_PRINTF("[SF] backoff reset for dst=0x%04X idx=%d\n", dst_addr, i);
         }
     }
 }

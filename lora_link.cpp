@@ -44,12 +44,13 @@ bool lora_send_packet(const Packet& p) {
         }
         delay(5);  // stabilizasyon
     } else {
-        delay(60); // AUX pini yok: sabit bekleme
+        delay(120); // AUX pini yok: sabit bekleme (SX1262 RF TX için yeterli marj)
     }
 
-    // TX tamamlandı: RX state machine'i sıfırla.
-    // FIFO'yu temizlemiyoruz — gerçek gelen paketler korunuyor.
-    lora_rx_reset();
+    // NOT: lora_rx_reset() burada kasıtlı olarak ÇAĞRILMIYOR.
+    // TX biter bitmez karşı taraf ACK göndermeye başlayabilir; sıfırlama
+    // kısmen alınmış ACK byte'larını siler ve ACK timeout'a yol açar.
+    // RX state machine'in SOF1/SOF2 sync mekanizması gürültüyü zaten temizler.
 
     return (written == total_len);
 }

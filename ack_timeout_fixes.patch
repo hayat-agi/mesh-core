@@ -1,0 +1,144 @@
+From 658a89b04b3e4ec09df7cf32feac301674d5601e Mon Sep 17 00:00:00 2001
+From: Gratianaa <nazlarsl01@gmail.com>
+Date: Wed, 13 May 2026 12:53:15 +0000
+Subject: [PATCH] =?UTF-8?q?fix:=20ACK=20timeout=20=E2=80=94=204=20kritik?=
+ =?UTF-8?q?=20duzeltme=20(main=20+=20Lite)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+1. lora_link: lora_rx_reset() TX sonrasinda kaldirildi
+   TX biter bitmez karsi taraf ACK gondermeye basliyor; reset
+   kismi alinan ACK byte'larini siliyordu ve ACK timeout'a
+   yol aciyordu. SOF1/SOF2 sync mekanizmasi gurultuyu zaten temizler.
+
+2. lora_link: delay(60) -> delay(120) ms
+   SX1262 RF TX surecini tamamlamak icin 60ms bazen yeterli
+   degil; 120ms ile yeterli marj saglandi. AUX pinli kartlarda
+   bu kod zaten calismiyordu (AUX bekleniyor).
+
+3. routing/store_forward: mesh_retry_queued_packet(uint16_t)
+   -> sf_reset_backoff_for_dst(uint16_t)
+   routing.cpp'deki 'extern void mesh_retry_queued_packet(uint16_t)'
+   ile mesh_link.h'daki 'bool mesh_retry_queued_packet(Packet&,...)'
+   imza cakismasi UB'ye (tanimsiz davranism) yol aciyordu.
+   Fonksiyon yeniden adlandirildi, store_forward.h'a bildirimi eklendi.
+
+4. routing: extern forward declaration -> #include mesh_link.h
+   Onceki ham extern bildirimi imza uyumsuzluguna acikti.
+   Artik mesh_link.h ustunden dogru imza kullaniliyor.
+
+Etkilenen dosyalar: lora_link.cpp, routing.cpp, store_forward.cpp,
+store_forward.h (main + LifeNetLoRaMeshLite)
+---
+ lora_link.cpp     |  9 +++++----
+ routing.cpp       | 14 ++++++++++++--
+ store_forward.cpp | 13 +++++++++----
+ store_forward.h   |  5 +++++
+ 4 files changed, 31 insertions(+), 10 deletions(-)
+
+diff --git a/lora_link.cpp b/lora_link.cpp
+index e26d2ec..22a6304 100644
+--- a/lora_link.cpp
++++ b/lora_link.cpp
+@@ -44,12 +44,13 @@ bool lora_send_packet(const Packet& p) {
+         }
+         delay(5);  // stabilizasyon
+     } else {
+-        delay(60); // AUX pini yok: sabit bekleme
++        delay(120); // AUX pini yok: sabit bekleme (SX1262 RF TX için yeterli marj)
+     }
+ 
+-    // TX tamamlandı: RX state machine'i sıfırla.
+-    // FIFO'yu temizlemiyoruz — gerçek gelen paketler korunuyor.
+-    lora_rx_reset();
++    // NOT: lora_rx_reset() burada kasıtlı olarak ÇAĞRILMIYOR.
++    // TX biter bitmez karşı taraf ACK göndermeye başlayabilir; sıfırlama
++    // kısmen alınmış ACK byte'larını siler ve ACK timeout'a yol açar.
++    // RX state machine'in SOF1/SOF2 sync mekanizması gürültüyü zaten temizler.
+ 
+     return (written == total_len);
+ }
+diff --git a/routing.cpp b/routing.cpp
+index 060fac4..8a3f1cd 100644
+--- a/routing.cpp
++++ b/routing.cpp
+@@ -5,7 +5,8 @@
+ 
+ #define ROUTE_LIFETIME_MS 3600000
+ 
+-extern void mesh_retry_queued_packet(uint16_t dst_addr);
++// mesh_link.h'daki gercek imzayla eslestirildi — onceki void/uint16_t imzasi UB'ye yol aciyordu.
++#include "mesh_link.h"
+ 
+ static RouteEntry routing_table[ROUTING_TABLE_SIZE];
+ 
+@@ -18,7 +19,13 @@ void routing_init() {
+ void routing_purge_expired(uint32_t now_ms) {
+     for (int i = 0; i < ROUTING_TABLE_SIZE; ++i) {
+         if (routing_table[i].in_use) {
++            // lifetime, son-gecerli-zaman (absolute ms) olarak saklanıyor.
++            // (int32_t) cast'i millis() 49.7 gunluk overflow'unda da dogru calisir
++            // cunku isaretli fark her iki yone de en fazla ~24.8 gun tasir.
++            // Kural: now_ms >= lifetime ise sure doldu.
+             if ((int32_t)(now_ms - routing_table[i].lifetime) >= 0) {
++                DBG_PRINTF("[ROUTING] purge dst=0x%04X lifetime expired\n",
++                           routing_table[i].destination);
+                 routing_table[i].in_use = false;
+             }
+         }
+@@ -164,7 +171,10 @@ ControlAction handle_rrep(Packet& p, uint16_t local_addr, uint32_t now_ms) {
+ 
+     if (p.dst_addr == local_addr) {
+         DBG_PRINTF("[ROUTING] RREP received! Route established to 0x%04X\n", p.src_addr);
+-        mesh_retry_queued_packet(p.src_addr); 
++        // store_forward kuyrugundaki bekleyen paketlerin backoff'unu sifirla
++        // (sf_process bir sonraki donuste aninda yeniden dener)
++        extern void sf_reset_backoff_for_dst(uint16_t dst_addr);
++        sf_reset_backoff_for_dst(p.src_addr);
+         return action; 
+     }
+ 
+diff --git a/store_forward.cpp b/store_forward.cpp
+index be78a1e..d78922e 100644
+--- a/store_forward.cpp
++++ b/store_forward.cpp
+@@ -115,12 +115,17 @@ void sf_debug_dump(uint32_t now_ms) {
+ #endif
+ }
+ 
+-void mesh_retry_queued_packet(uint16_t dst_addr) {
+-    // AODV hedefin rotasını buldu! 
+-    // Kuyrukta bu hedefi bekleyen paketlerin Exponential Backoff süresini sıfırla
++// sf_reset_backoff_for_dst: RREP alındığında routing.cpp tarafından çağrılır.
++// Kuyrukta bu hedefe ait paketlerin exponential backoff sayacını sıfırlar;
++// böylece sf_process bir sonraki döngüde yeniden deneme yapar.
++// NOT: eskiden mesh_retry_queued_packet(uint16_t) adıyla tanımlıydı;
++//      mesh_link.h'daki bool mesh_retry_queued_packet(Packet&, uint16_t, uint32_t)
++//      ile imza çakışması UB'ye (tanımsız davranışa) yol açıyordu — yeniden adlandırıldı.
++void sf_reset_backoff_for_dst(uint16_t dst_addr) {
+     for (int i = 0; i < QUEUE_MAX_MESSAGES; ++i) {
+         if (queue[i].in_use && queue[i].packet.dst_addr == dst_addr) {
+-            queue[i].last_attempt_time = 0; // Süreyi sıfırla ki ilk sf_process dönüşünde anında fırlatılsın!
++            queue[i].last_attempt_time = 0;
++            DBG_PRINTF("[SF] backoff reset for dst=0x%04X idx=%d\n", dst_addr, i);
+         }
+     }
+ }
+\ No newline at end of file
+diff --git a/store_forward.h b/store_forward.h
+index a247aea..4bf0bdd 100644
+--- a/store_forward.h
++++ b/store_forward.h
+@@ -32,3 +32,8 @@ bool sf_enqueue(const Packet& p, uint32_t now_ms);
+ //  - update retry_count, and drop messages exceeding QUEUE_MAX_RETRIES.
+ void sf_process(uint32_t now_ms, StoreForwardSendFn send_fn);
+ void sf_debug_dump(uint32_t now_ms);
++
++// RREP alındığında routing.cpp tarafından çağrılır.
++// dst_addr hedefine ait kuyruklanmış paketlerin exponential backoff süresini sıfırlar,
++// böylece sf_process bir sonraki döngüde yeniden deneme yapar.
++void sf_reset_backoff_for_dst(uint16_t dst_addr);
+-- 
+2.47.3
+

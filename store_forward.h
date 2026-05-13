@@ -32,3 +32,8 @@ bool sf_enqueue(const Packet& p, uint32_t now_ms);
 //  - update retry_count, and drop messages exceeding QUEUE_MAX_RETRIES.
 void sf_process(uint32_t now_ms, StoreForwardSendFn send_fn);
 void sf_debug_dump(uint32_t now_ms);
+
+// RREP alındığında routing.cpp tarafından çağrılır.
+// dst_addr hedefine ait kuyruklanmış paketlerin exponential backoff süresini sıfırlar,
+// böylece sf_process bir sonraki döngüde yeniden deneme yapar.
+void sf_reset_backoff_for_dst(uint16_t dst_addr);
