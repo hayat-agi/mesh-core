@@ -63,7 +63,19 @@ static uint16_t local_seq_num = 0;
 static const char* DEVICE_NAME   = "ESP32_LifeNet_Node_4";
 static const char* SERVICE_UUID  = "12345678-1234-1234-1234-123456789abc";
 static const char* CHAR_RX_UUID  = "12345678-1234-1234-1234-123456789abd";
-static const char* CHAR_TX_UUID  = "12345678-1234-1234-1234-123456789abe";
+static const char* CHAR_TX_UUID     = "12345678-1234-1234-1234-123456789abe";
+static const char* CHAR_SENSOR_UUID = "12345678-1234-1234-1234-123456789abf";
+
+// ─── MPU-6050 Configuration & Earthquake Logic ───────────────────────────────
+
+static const uint8_t  MPU_ADDR           = 0x68;
+static const int      MPU_SDA_PIN        = 32;
+static const int      MPU_SCL_PIN        = 33;
+static const uint32_t SENSOR_INTERVAL_MS = 40;  // 25 Hz
+
+static uint32_t lastEarthquakeAlertMs = 0;
+static uint8_t  earthquakeSampleCount = 0;
+static const float EARTHQUAKE_THRESHOLD = 2.0f; // m/s^2
 
 static const char*    ACTIVATION_PASSWORD = "ACTIVATE_2026";
 static const char*    NVS_NAMESPACE       = "device_cfg";
@@ -81,12 +93,15 @@ static bool     isLockedOut     = false;
 
 // ─── BLE Globals ────────────────────────────────────────────────────────────
 
-static NimBLECharacteristic* pTxChar = nullptr;
-static volatile uint8_t clientCount  = 0;
-static volatile uint8_t txSubscribedCount = 0;
+static NimBLECharacteristic* pTxChar         = nullptr;
+static NimBLECharacteristic* pSensorChar      = nullptr;
+static volatile uint8_t      clientCount      = 0;
+static volatile uint8_t      txSubscribedCount = 0;
+static volatile uint8_t      sensorSubCount   = 0;
 
 static const uint32_t NOTIFY_INTERVAL_MS = 50;
-static uint32_t lastNotifyMs = 0;
+static uint32_t lastNotifyMs   = 0;
+static uint32_t lastSensorMs   = 0;
 
 // basit küçük TX kuyruğu
 #define TX_BUF_SLOTS    8
@@ -566,6 +581,19 @@ class TxCallbacks : public NimBLECharacteristicCallbacks {
   }
 };
 
+class SensorCallbacks : public NimBLECharacteristicCallbacks {
+  void onSubscribe(NimBLECharacteristic*, NimBLEConnInfo& info,
+                   uint16_t subValue) override {
+    if (subValue == 0) {
+      if (sensorSubCount > 0) sensorSubCount--;
+      Serial.printf("[SENSOR] Client unsubscribed (conn=%u)\n", info.getConnHandle());
+    } else {
+      sensorSubCount++;
+      Serial.printf("[SENSOR] Client subscribed to sensor stream (conn=%u)\n", info.getConnHandle());
+    }
+  }
+};
+
 class ServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer*, NimBLEConnInfo& info) override {
     clientCount++;
@@ -578,8 +606,10 @@ class ServerCallbacks : public NimBLEServerCallbacks {
     if (clientCount > 0) clientCount--;
     if (clientCount == 0) {
       txSubscribedCount = 0;
-    } else if (txSubscribedCount > clientCount) {
-      txSubscribedCount = clientCount;
+      sensorSubCount    = 0;
+    } else {
+      if (txSubscribedCount > clientCount) txSubscribedCount = clientCount;
+      if (sensorSubCount    > clientCount) sensorSubCount    = clientCount;
     }
     Serial.printf("[BLE] Disconnected (reason %d, %d remain)\n", reason, clientCount);
     startAdvertising();
@@ -600,6 +630,63 @@ static void startAdvertising() {
   } else {
     Serial.println("[ADV] ERROR — failed to start");
   }
+}
+
+// ─── MPU-6050 Helpers ────────────────────────────────────────────────────────
+
+static void mpuWriteReg(uint8_t reg, uint8_t val) {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(reg);
+  Wire.write(val);
+  Wire.endTransmission(true);
+}
+
+static void mpuInit() {
+  Wire.begin(MPU_SDA_PIN, MPU_SCL_PIN);
+  delay(100);
+  mpuWriteReg(0x6B, 0x00);  // PWR_MGMT_1: wake up
+  mpuWriteReg(0x1C, 0x00);  // ACCEL_CONFIG: ±2g
+  mpuWriteReg(0x1B, 0x00);  // GYRO_CONFIG: ±250°/s
+  Serial.println("[MPU] MPU-6050 initialized (SDA=32, SCL=33, addr=0x68)");
+}
+
+// Packet format: 6 × float32 little-endian [ax, ay, az, gx, gy, gz]
+// ax/ay/az in m/s²; gx/gy/gz in rad/s
+static bool mpuReadAndPack(uint8_t* out24) {
+  Wire.beginTransmission(MPU_ADDR);
+  Wire.write(0x3B);
+  if (Wire.endTransmission(false) != 0) return false;
+
+  uint8_t received = Wire.requestFrom((uint8_t)MPU_ADDR, (uint8_t)14, (uint8_t)true);
+  if (received < 14) return false;
+
+  uint8_t raw[14];
+  for (int i = 0; i < 14; i++) raw[i] = Wire.read();
+
+  int16_t rawAx = (int16_t)((raw[0]  << 8) | raw[1]);
+  int16_t rawAy = (int16_t)((raw[2]  << 8) | raw[3]);
+  int16_t rawAz = (int16_t)((raw[4]  << 8) | raw[5]);
+  int16_t rawGx = (int16_t)((raw[8]  << 8) | raw[9]);
+  int16_t rawGy = (int16_t)((raw[10] << 8) | raw[11]);
+  int16_t rawGz = (int16_t)((raw[12] << 8) | raw[13]);
+
+  const float ACCEL_SCALE = 9.81f / 16384.0f;
+  const float GYRO_SCALE  = (3.14159265f / 180.0f) / 131.0f;
+
+  float ax = rawAx * ACCEL_SCALE;
+  float ay = rawAy * ACCEL_SCALE;
+  float az = rawAz * ACCEL_SCALE;
+  float gx = rawGx * GYRO_SCALE;
+  float gy = rawGy * GYRO_SCALE;
+  float gz = rawGz * GYRO_SCALE;
+
+  memcpy(out24 +  0, &ax, 4);
+  memcpy(out24 +  4, &ay, 4);
+  memcpy(out24 +  8, &az, 4);
+  memcpy(out24 + 12, &gx, 4);
+  memcpy(out24 + 16, &gy, 4);
+  memcpy(out24 + 20, &gz, 4);
+  return true;
 }
 
 // ─── Orijinal setup() + BLE ekle ───────────────────────────────────────────
@@ -689,15 +776,24 @@ void setup() {
   );
   pTxChar->setCallbacks(new TxCallbacks());
 
+  pSensorChar = pService->createCharacteristic(
+    CHAR_SENSOR_UUID,
+    NIMBLE_PROPERTY::NOTIFY | NIMBLE_PROPERTY::READ
+  );
+  pSensorChar->setCallbacks(new SensorCallbacks());
+
+  mpuInit();
+
   pService->start();
   setupAdvertising();
   startAdvertising();
 
   Serial.println("----------------------------------");
-  Serial.printf("  Service  : %s\n", SERVICE_UUID);
-  Serial.printf("  RX Char  : %s\n", CHAR_RX_UUID);
-  Serial.printf("  TX Char  : %s\n", CHAR_TX_UUID);
-  Serial.printf("  Status   : %s\n", deviceActivated ? "READY" : "AWAITING ACTIVATION");
+  Serial.printf("  Service      : %s\n", SERVICE_UUID);
+  Serial.printf("  RX Char      : %s\n", CHAR_RX_UUID);
+  Serial.printf("  TX Char      : %s\n", CHAR_TX_UUID);
+  Serial.printf("  Sensor Char  : %s\n", CHAR_SENSOR_UUID);
+  Serial.printf("  Status       : %s\n", deviceActivated ? "READY" : "AWAITING ACTIVATION");
   Serial.println("----------------------------------");
 }
 
@@ -845,6 +941,48 @@ void loop() {
           Serial.println("[TX] notify() failed");
         }
         lastNotifyMs = now_ms;
+      }
+    }
+  }
+
+  // 25 Hz MPU-6050 sensor okuma & Earthquake Detection
+  if (now_ms - lastSensorMs >= SENSOR_INTERVAL_MS) {
+    lastSensorMs = now_ms;
+    uint8_t packet[24];
+    if (mpuReadAndPack(packet)) {
+      // 1. BLE bağlıysa veriyi bildir
+      if (clientCount > 0 && sensorSubCount > 0 && pSensorChar) {
+        pSensorChar->setValue(packet, sizeof(packet));
+        pSensorChar->notify();
+      }
+
+      // 2. Deprem tespiti (Earthquake Detection)
+      float ax, ay, az;
+      memcpy(&ax, packet + 0, 4);
+      memcpy(&ay, packet + 4, 4);
+      memcpy(&az, packet + 8, 4);
+
+      // İvme vektörü büyüklüğü
+      float a_mag = sqrt(ax*ax + ay*ay + az*az);
+      // Yerçekimini çıkararak dinamik ivmeyi bul (yaklaşık 9.81 m/s^2)
+      float a_dyn = abs(a_mag - 9.81f);
+
+      if (a_dyn > EARTHQUAKE_THRESHOLD) {
+        earthquakeSampleCount++;
+        // En az 3 ardışık örnekte eşiği geçiyorsa (anlık gürültüleri önlemek için)
+        if (earthquakeSampleCount >= 3) {
+          // Son uyarının üzerinden en az 30 saniye geçmişse yeni uyarı ver
+          if (now_ms - lastEarthquakeAlertMs > 30000) {
+            lastEarthquakeAlertMs = now_ms;
+            Serial.printf("[EARTHQUAKE] Detected! Dynamic Accel: %.2f m/s^2\n", a_dyn);
+
+            // LoRa üzerinden Gateway'e DEPREM mesajı gönder
+            std::string alertMsg = "EARTHQUAKE_DETECTED";
+            forwardToLoRa(alertMsg);
+          }
+        }
+      } else {
+        earthquakeSampleCount = 0;
       }
     }
   }
