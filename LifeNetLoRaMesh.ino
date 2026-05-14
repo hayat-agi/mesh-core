@@ -488,6 +488,21 @@ private:
       // MSG_OK önce — forwardToLoRa blocking (max 6sn), mobil 5sn'de timeout yapar
       queueTxMessage("MSG_OK");
       forwardToLoRa(binary);
+#if IS_GATEWAY
+      {
+        uint8_t msgLen = (binary.size() >= 6) ? (uint8_t)binary[5] : 0;
+        std::string msgText = (msgLen > 0 && binary.size() >= 6u + msgLen)
+                              ? binary.substr(6, msgLen) : "";
+        Packet uplinkPkt;
+        packet_init(uplinkPkt);
+        uplinkPkt.msg_id      = esp_random();
+        uplinkPkt.src_addr    = LOCAL_ADDR;
+        uplinkPkt.hop_count   = 0;
+        uplinkPkt.payload_len = (uint8_t)std::min(binary.size(), (size_t)MAX_PAYLOAD_LEN);
+        memcpy(uplinkPkt.payload, binary.data(), uplinkPkt.payload_len);
+        gatewayUplink(uplinkPkt, msgText);
+      }
+#endif
       return;
     }
 
@@ -501,6 +516,21 @@ private:
       }
       queueTxMessage("MSG_OK");
       forwardToLoRa(input);
+#if IS_GATEWAY
+      {
+        uint8_t msgLen = (input.size() >= 6) ? (uint8_t)input[5] : 0;
+        std::string msgText = (msgLen > 0 && input.size() >= 6u + msgLen)
+                              ? input.substr(6, msgLen) : "";
+        Packet uplinkPkt;
+        packet_init(uplinkPkt);
+        uplinkPkt.msg_id      = esp_random();
+        uplinkPkt.src_addr    = LOCAL_ADDR;
+        uplinkPkt.hop_count   = 0;
+        uplinkPkt.payload_len = (uint8_t)std::min(input.size(), (size_t)MAX_PAYLOAD_LEN);
+        memcpy(uplinkPkt.payload, input.data(), uplinkPkt.payload_len);
+        gatewayUplink(uplinkPkt, msgText);
+      }
+#endif
       return;
     }
 
