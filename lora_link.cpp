@@ -38,16 +38,28 @@ bool lora_send_packet(const Packet& p) {
     Serial1.flush();
 
     // LoRa modülü RF TX'i tamamlayana kadar bekle.
-    // AUX pini varsa (HIGH = hazır) onu kullan, yoksa sabit süre bekle.
-    // 9600 baud + RF overhead: tipik 50-120ms.
+    //
+    // ⚠️ E22-900T22D (SX1262) ÖNEMLİ FARK:
+    //   E32 (SX1278)'de AUX=HIGH → RF üzerinden iletim TAMAMEN bitti demektir.
+    //   E22 (SX1262)'de AUX=HIGH → Dahili buffer RF çipine aktarıldı demektir,
+    //   ancak RF üzerinden iletim HÂLÂ DEVAM EDİYOR OLABİLİR!
+    //   Bu yüzden AUX=HIGH sonrası ekstra hava süresi (air-time) bekliyoruz.
+    //
+    // E22-900T22D varsayılan Air Data Rate: 2.4 kbps
+    //   SF/BW modülün firmware'i tarafından seçilir, doğrudan kontrol edilemez.
+    //   33-byte paket için RF on-air ≈ 300-600ms arası olabilir.
+    //   AUX HIGH geldikten sonra kalan tahmini on-air için 500ms bekliyoruz.
     if (LORA_AUX_PIN >= 0) {
+        delay(10);   // AUX=LOW gecikmesini bekle (flush→AUX arası race: ~2-5ms)
         uint32_t t = millis();
-        while (digitalRead(LORA_AUX_PIN) == LOW && (millis() - t) < 200) {
-            delay(1);
+        while (digitalRead(LORA_AUX_PIN) == LOW && (millis() - t) < 700) {
+            delay(2);
         }
-        delay(5);  // stabilizasyon
+        // E22 (SX1262): AUX=HIGH = buffer→RF chip tamam, ama hava iletimi sürebilir.
+        // 2.4 kbps air rate varsayımıyla güvenli bekleme:
+        delay(500);
     } else {
-        delay(60); // AUX pini yok: sabit bekleme
+        delay(700); // AUX pini yok: E22 için sabit tam bekleme (RF air-time dahil)
     }
 
     // TX tamamlandı: RX state machine'i sıfırla.

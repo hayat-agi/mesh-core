@@ -5,7 +5,12 @@
 #include "debug.h"
 #include <Arduino.h>
 
-#define ACK_TIMEOUT_MS 2000
+// Toplam ACK süresi hesabı:
+//   Gönderici TX: flush + AUX bekleme + stabilizasyon ≈ 540ms (maks)
+//   Alıcı ACK gecikmesi (send_data_ack): ACK_REPLY_DELAY_MS = 150ms
+//   Alıcı ACK TX: ≈ 540ms (maks)
+//   → Maks toplam ≈ 1.23s → 4000ms rahat bir marj.
+#define ACK_TIMEOUT_MS 4000
 #define MAX_TX_RETRIES 3
 #define ACK_REPLY_DELAY_MS 150
 
