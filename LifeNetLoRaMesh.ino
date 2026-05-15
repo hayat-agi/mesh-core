@@ -14,13 +14,14 @@
 #if IS_GATEWAY
   #include <WiFi.h>
   #include <HTTPClient.h>
+  #include <WiFiClientSecure.h>   // HTTPS (port 443) için gerekli
 
   // -- Sadece bu bolumu degistir -----------------------------------------
-  #define WIFI_SSID    "Berkay"         // ag adiniz
-  #define WIFI_PASS    "brky1234"     // ag sifreniz
-  #define BACKEND_IP   "192.168.1.107"    // bilgisayarin LAN IP'si
-  #define BACKEND_PORT  5000
-  #define GATEWAY_ID   "B0:CB:D8:EE:7E:46"        // backend'deki gateway id
+  #define WIFI_SSID    "Berkay"          // ag adiniz
+  #define WIFI_PASS    "brky1234"        // ag sifreniz
+  #define BACKEND_IP   "hayatagi.duckdns.org"  // DuckDNS domain
+  #define BACKEND_PORT  443              // HTTPS portu
+  #define GATEWAY_ID   "B0:CB:D8:EE:7E:46"   // backend'deki gateway id
   // Heartbeat — backend liveness telemetry. Token must match
   // GATEWAY_HEARTBEAT_TOKEN on the server. 30s cadence; 90s server timeout
   // → missing 3 in a row marks the gateway inactive.
@@ -266,13 +267,18 @@ static void gatewayUplink(const Packet& p, const std::string& msgText) {
     (unsigned int)p.msg_id
   );
 
-  char url[128];
+  char url[160];
   snprintf(url, sizeof(url),
-    "http://%s:%u/api/gateways/%s/disaster-events",
-    BACKEND_IP, (unsigned)BACKEND_PORT, GATEWAY_ID);
+    "https://%s/api/gateways/%s/disaster-events",
+    BACKEND_IP, GATEWAY_ID);
+
+  // HTTPS için WiFiClientSecure kullan
+  WiFiClientSecure client;
+  client.setInsecure();  // Test ortamı: sertifika doğrulaması atlanıyor
+                         // Production'da: client.setCACert(root_ca_pem);
 
   HTTPClient http;
-  http.begin(url);
+  http.begin(client, url);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Source",   "mesh-uplink");
   http.addHeader("X-Mesh-Hops", String(p.hop_count));
@@ -315,11 +321,16 @@ static void sendHeartbeat() {
 
   char url[128];
   snprintf(url, sizeof(url),
-    "http://%s:%u/api/gateways/heartbeat",
-    BACKEND_IP, (unsigned)BACKEND_PORT);
+    "https://%s/api/gateways/heartbeat",
+    BACKEND_IP);
+
+  // HTTPS için WiFiClientSecure kullan
+  WiFiClientSecure client;
+  client.setInsecure();  // Test ortamı: sertifika doğrulaması atlanıyor
+                         // Production'da: client.setCACert(root_ca_pem);
 
   HTTPClient http;
-  http.begin(url);
+  http.begin(client, url);
   http.addHeader("Content-Type", "application/json");
   http.addHeader("X-Device-Token", HEARTBEAT_TOKEN);
 
