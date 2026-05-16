@@ -7,6 +7,12 @@
 #define LORA_M0_PIN 25
 #define LORA_M1_PIN 26
 
+// App-layer cap on a single serialized Packet on the wire. The SX127x/E22
+// PHY supports up to ~255 bytes per frame; we cap below that to leave
+// margin for SOF1/SOF2/len framing and to keep airtime predictable.
+// Raised from 85 to 128 to fit the new hop_path field in the header.
+#define LORA_MAX_FRAME 128
+
 void lora_init() {
     if (LORA_AUX_PIN >= 0) {
         pinMode(LORA_AUX_PIN, INPUT);
@@ -22,11 +28,11 @@ void lora_init() {
 }
 
 bool lora_send_packet(const Packet& p) {
-    uint8_t buf[128]; 
-    
+    uint8_t buf[LORA_MAX_FRAME + 3];  // +3 for SOF1, SOF2, len
+
     size_t serialized_len = packet_serialize(p, &buf[3], sizeof(buf) - 3);
-    if (serialized_len == 0 || serialized_len > 85) {
-        return false; 
+    if (serialized_len == 0 || serialized_len > LORA_MAX_FRAME) {
+        return false;
     }
 
     buf[0] = 0xAA; // SOF1
@@ -79,7 +85,7 @@ enum RxState {
 // Kalıcı RX state machine — çağrılar arasında kısmi alınan baytlar korunur.
 // Böylece ACK polling döngüsünde kısa timeout'larla bile paket kaybı olmaz.
 static RxState  s_rx_state        = WAIT_SOF1;
-static uint8_t  s_rx_buf[128];
+static uint8_t  s_rx_buf[LORA_MAX_FRAME];
 static size_t   s_rx_bytes_read   = 0;
 static uint8_t  s_rx_expected_len = 0;
 
@@ -110,7 +116,7 @@ bool lora_receive_packet(Packet& out, uint32_t timeout_ms) {
                     }
                     break;
                 case WAIT_LEN:
-                    if (c == 0 || c > 85) {
+                    if (c == 0 || c > LORA_MAX_FRAME) {
                         s_rx_state = WAIT_SOF1;
                     } else {
                         s_rx_expected_len = c;
