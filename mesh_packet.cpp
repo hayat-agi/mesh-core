@@ -28,6 +28,10 @@ void packet_init(Packet& p) {
     p.type = 0;
     p.ai_priority = 0;
     p.payload_len = 0;
+    p.path_len = 0;
+    for (int i = 0; i < MESH_PATH_MAX; ++i) {
+        p.path[i] = 0;
+    }
     for (int i = 0; i < MAX_PAYLOAD_LEN; ++i) {
         p.payload[i] = 0;
     }
@@ -58,9 +62,13 @@ static inline uint32_t read_u32_le(const uint8_t* buf) {
     return (uint32_t)buf[0] | ((uint32_t)buf[1] << 8) | ((uint32_t)buf[2] << 16) | ((uint32_t)buf[3] << 24);
 }
 
-// Header size is everything before the payload
-// msg_id(4) + src(2) + dst(2) + prev(2) + next(2) + ttl(1) + hop(1) + seq(2) + type(1) + ai(1) + plen(1) = 19 bytes
-#define HEADER_SIZE 19
+// Header size is everything before the payload, including the hop_path
+// metadata (path_len byte + MESH_PATH_MAX u16 entries, fixed on the wire).
+// Core: msg_id(4) + src(2) + dst(2) + prev(2) + next(2) + ttl(1) + hop(1)
+//       + seq(2) + type(1) + ai(1) + plen(1) = 19 bytes
+// Path: path_len(1) + path[MESH_PATH_MAX](2 * 8 = 16) = 17 bytes
+// Total: 36 bytes
+#define HEADER_SIZE 36
 
 size_t packet_serialize(const Packet& p, uint8_t* buf, size_t buf_size) {
     uint8_t plen = p.payload_len;
@@ -86,12 +94,19 @@ size_t packet_serialize(const Packet& p, uint8_t* buf, size_t buf_size) {
     buf[offset++] = p.ai_priority;
     buf[offset++] = plen;
 
+    // hop_path metadata: fixed-size on wire so deserialize stays stateless.
+    uint8_t pn = p.path_len > MESH_PATH_MAX ? MESH_PATH_MAX : p.path_len;
+    buf[offset++] = pn;
+    for (uint8_t i = 0; i < MESH_PATH_MAX; ++i) {
+        write_u16_le(&buf[offset], p.path[i]); offset += 2;
+    }
+
     // Payload
     for (size_t i = 0; i < plen; ++i) {
         buf[offset++] = p.payload[i];
     }
 
-    // CRC is over the header and payload
+    // CRC is over the header (incl. hop_path) and payload
     uint16_t crc = calculate_crc16(buf, offset);
     write_u16_le(&buf[offset], crc); offset += 2;
 
@@ -114,10 +129,20 @@ bool packet_deserialize(Packet& p, const uint8_t* buf, size_t len) {
     p.seq_num = read_u16_le(&buf[offset]); offset += 2;
     p.type = buf[offset++];
     p.ai_priority = buf[offset++];
-    
+
     uint8_t plen = buf[offset++];
     if (plen > MAX_PAYLOAD_LEN) {
         return false; // Invalid payload length
+    }
+
+    // hop_path: fixed-size on wire, validate path_len bound
+    uint8_t pn = buf[offset++];
+    if (pn > MESH_PATH_MAX) {
+        return false;
+    }
+    p.path_len = pn;
+    for (uint8_t i = 0; i < MESH_PATH_MAX; ++i) {
+        p.path[i] = read_u16_le(&buf[offset]); offset += 2;
     }
 
     if (len < HEADER_SIZE + plen + 2) {
@@ -134,7 +159,7 @@ bool packet_deserialize(Packet& p, const uint8_t* buf, size_t len) {
     uint16_t expected_crc = read_u16_le(&buf[offset]);
     // The CRC is calculated over buf from 0 to HEADER_SIZE + plen
     uint16_t calculated_crc = calculate_crc16(buf, HEADER_SIZE + plen);
-    
+
     if (expected_crc != calculated_crc) {
         return false; // CRC mismatch
     }
