@@ -191,6 +191,11 @@ bool mesh_handle_incoming(Packet& p, uint16_t local_addr, uint32_t now_ms) {
 
         // Eğer nihai hedef BİZ isek (Gateway), veriyi işledik demektir.
         if (p.dst_addr == local_addr) {
+            // hop_path: append our addr so the uplink reflects the full
+            // traversed chain (source..gateway). Overflow is a silent no-op.
+            if (p.path_len < MESH_PATH_MAX) {
+                p.path[p.path_len++] = local_addr;
+            }
             DBG_PRINTLN("[MESH_RX] Packet arrived at FINAL DESTINATION!");
             return true;
         }
@@ -205,6 +210,12 @@ bool mesh_handle_incoming(Packet& p, uint16_t local_addr, uint32_t now_ms) {
 
         p.ttl      -= 1;
         p.hop_count += 1;
+
+        // hop_path: append our addr before forwarding so downstream nodes
+        // see us in the chain. Overflow is a silent no-op.
+        if (p.path_len < MESH_PATH_MAX) {
+            p.path[p.path_len++] = local_addr;
+        }
 
         RouteEntry route;
         if (!routing_lookup(p.dst_addr, route, now_ms)) {
