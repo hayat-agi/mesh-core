@@ -9,6 +9,13 @@
 // Geniş mesaj + household JSON özelliklerini desteklemek için 200'e çıkarıldı.
 #define MAX_PAYLOAD_LEN 200
 
+// Ordered chain of node addresses a packet has traversed. Source seeds
+// path[0] = LOCAL_ADDR, path_len = 1; each relay appends its address
+// before forwarding so the gateway can uplink the full chain. 8 supports
+// a 7-hop mesh, well beyond the planned 5-node layout. Fixed-size on the
+// wire to keep deserialization stateless.
+#define MESH_PATH_MAX 8
+
 // Packet struct as defined in the PRD
 typedef struct __attribute__((packed)) {
     uint32_t msg_id;       // Unique message ID for duplicate detection
@@ -29,6 +36,10 @@ typedef struct __attribute__((packed)) {
 
     uint8_t  ai_priority;  // 0=LOW, 1=NORMAL, 2=HIGH, 3=CRITICAL
     uint8_t  payload_len;  // Actual payload length in bytes
+
+    uint8_t  path_len;                  // # of valid entries in path[]
+    uint16_t path[MESH_PATH_MAX];       // chain of traversed node addrs
+
     uint8_t  payload[MAX_PAYLOAD_LEN];  // Application payload buffer (V1 fixed size)
 
     uint16_t crc;          // CRC16 over header + payload_len bytes (excluding crc field)
