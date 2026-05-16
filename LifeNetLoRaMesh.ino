@@ -785,17 +785,6 @@ void setup() {
   }
 #endif
 
-  uint32_t now = millis();
-  routing_add_or_update(
-      GATEWAY_ADDR,
-      0x0004,         // Node 2 icin burasi boyle olacak Aracı / Next Hop (NODE 1)
-      1,              // hop_count
-      0,              // seq_num
-      now + 604800000, // node 
-      0,
-      ROUTE_VALID
-  );
-
   // BLE + NVS init (LoRa'yı yukarıda bıraktık)
   txRingInit(txRing);
 
