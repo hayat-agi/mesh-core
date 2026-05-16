@@ -252,6 +252,19 @@ static void gatewayUplink(const Packet& p, const std::string& msgText) {
     else                 safeMsg += c;
   }
 
+  // hop_path: comma-separated hex addresses (source..gateway). path_len
+  // is already populated by source seed + per-relay/gateway appends in
+  // mesh_handle_incoming, so we just format what's there.
+  char pathStr[80];
+  pathStr[0] = '\0';
+  size_t pathOff = 0;
+  for (uint8_t i = 0; i < p.path_len && i < MESH_PATH_MAX; ++i) {
+    int n = snprintf(pathStr + pathOff, sizeof(pathStr) - pathOff,
+                     "%s0x%04X", (i == 0) ? "" : ",", (unsigned)p.path[i]);
+    if (n < 0 || (size_t)n >= sizeof(pathStr) - pathOff) break;
+    pathOff += n;
+  }
+
   snprintf(body, sizeof(body),
     "{\"type\":\"manual_message\","
     "\"message\":\"%s\","
@@ -259,12 +272,14 @@ static void gatewayUplink(const Packet& p, const std::string& msgText) {
     "\"source\":\"mesh\","
     "\"meshHops\":%u,"
     "\"meshSrcAddr\":\"%s\","
-    "\"meshMsgId\":\"%X\"}",
+    "\"meshMsgId\":\"%X\","
+    "\"meshHopPath\":\"%s\"}",
     safeMsg.c_str(),
     (unsigned long)millis(),
     (unsigned)p.hop_count,
     hexSrc,
-    (unsigned int)p.msg_id
+    (unsigned int)p.msg_id,
+    pathStr
   );
 
   char url[160];
@@ -351,6 +366,11 @@ static void forwardToLoRa(const std::string& msg) {
   pkt.msg_id = esp_random();
   pkt.ttl         = 5;
   pkt.hop_count   = 0;
+  // hop_path: seed with our own address as the chain origin. Each relay
+  // appends its addr in mesh_handle_incoming; the gateway appends on
+  // final delivery, so the uplink reflects the full traversed chain.
+  pkt.path_len = 1;
+  pkt.path[0]  = LOCAL_ADDR;
   pkt.payload_len = (msg.size() > MAX_PAYLOAD_LEN)
                     ? MAX_PAYLOAD_LEN
                     : (uint8_t)msg.size();
