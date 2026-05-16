@@ -152,17 +152,6 @@ void setup() {
   dupdet_init();
   sf_init();
 
-  uint32_t now = millis();
-  routing_add_or_update(
-      GATEWAY_ADDR,
-      0x0004,            // TODO: next hop toward the gateway from THIS node
-      1,                 // hop_count
-      0,                 // seq_num
-      now + 604800000UL, // 7-day lifetime
-      0,
-      ROUTE_VALID
-  );
-
   Serial.println("----------------------------------");
   Serial.println("Status: READY (mesh only, no BLE)");
   Serial.println("----------------------------------");
