@@ -63,8 +63,8 @@ static const char* CHAR_SENSOR_UUID = "12345678-1234-1234-1234-123456789abf";
 // ─── MPU-6050 Configuration ──────────────────────────────────────────────────
 
 static const uint8_t  MPU_ADDR           = 0x68;
-static const int      MPU_SDA_PIN        = 32;
-static const int      MPU_SCL_PIN        = 33;
+static const int      MPU_SDA_PIN        = 21;
+static const int      MPU_SCL_PIN        = 22;
 static const uint32_t SENSOR_INTERVAL_MS = 40;  // 25 Hz
 
 static const char*    ACTIVATION_PASSWORD = "ACTIVATE_2026";
@@ -592,7 +592,7 @@ static void mpuInit() {
   mpuWriteReg(0x6B, 0x00);  // PWR_MGMT_1: wake up
   mpuWriteReg(0x1C, 0x00);  // ACCEL_CONFIG: ±2g
   mpuWriteReg(0x1B, 0x00);  // GYRO_CONFIG: ±250°/s
-  Serial.println("[MPU] MPU-6050 initialized (SDA=32, SCL=33, addr=0x68)");
+  Serial.println("[MPU] MPU-6050 initialized (SDA=21, SCL=22, addr=0x68)");
 }
 
 // Packet format: 6 × float32 little-endian [ax, ay, az, gx, gy, gz]
@@ -665,17 +665,6 @@ void setup() {
     Serial.println("[WiFi] Connection FAILED — uplink disabled until reconnect");
   }
 #endif
-
-  uint32_t now = millis();
-  routing_add_or_update(
-      GATEWAY_ADDR,
-      0x0004,         // Node 2 icin burasi boyle olacak Aracı / Next Hop (NODE 1)
-      1,              // hop_count
-      0,              // seq_num
-      now + 604800000, // node 
-      0,
-      ROUTE_VALID
-  );
 
   // BLE + NVS init (LoRa'yı yukarıda bıraktık)
   txRingInit(txRing);
@@ -788,7 +777,18 @@ void loop() {
               rrep.prev_hop = LOCAL_ADDR;
               rrep.next_hop = action.next_hop;
               rrep.ttl      = 7;
-              rrep.hop_count   = 0;
+              // BUG 6 fix: intermediate node must use cached route hop_count,
+              // not 0. When we are the destination, hop_count stays 0.
+              if (p.dst_addr != LOCAL_ADDR) {
+                  RouteEntry cached_route;
+                  if (routing_lookup(p.dst_addr, cached_route, now_ms)) {
+                      rrep.hop_count = cached_route.hop_count;
+                  } else {
+                      rrep.hop_count = 0;
+                  }
+              } else {
+                  rrep.hop_count = 0;
+              }
               rrep.seq_num     = ++local_seq_num;
               rrep.type        = PACKET_TYPE_RREP;
               rrep.ai_priority = 1;

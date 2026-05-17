@@ -19,10 +19,10 @@ void lora_init() {
 }
 
 bool lora_send_packet(const Packet& p) {
-    uint8_t buf[128]; 
+    uint8_t buf[256]; 
     
     size_t serialized_len = packet_serialize(p, &buf[3], sizeof(buf) - 3);
-    if (serialized_len == 0 || serialized_len > 85) {
+    if (serialized_len == 0 || serialized_len > 220) {
         return false; 
     }
 
@@ -64,7 +64,7 @@ enum RxState {
 // Kalıcı RX state machine — çağrılar arasında kısmi alınan baytlar korunur.
 // Böylece ACK polling döngüsünde kısa timeout'larla bile paket kaybı olmaz.
 static RxState  s_rx_state        = WAIT_SOF1;
-static uint8_t  s_rx_buf[128];
+static uint8_t  s_rx_buf[256];
 static size_t   s_rx_bytes_read   = 0;
 static uint8_t  s_rx_expected_len = 0;
 
@@ -95,7 +95,7 @@ bool lora_receive_packet(Packet& out, uint32_t timeout_ms) {
                     }
                     break;
                 case WAIT_LEN:
-                    if (c == 0 || c > 85) {
+                    if (c == 0 || c > 220) {
                         s_rx_state = WAIT_SOF1;
                     } else {
                         s_rx_expected_len = c;

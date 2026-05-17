@@ -174,6 +174,53 @@ bool mesh_retry_queued_packet(Packet& p, uint16_t local_addr, uint32_t now_ms) {
 }
 
 bool mesh_handle_incoming(Packet& p, uint16_t local_addr, uint32_t now_ms) {
+    // BUG 7 fix: control packets buffered during ACK wait must be dispatched
+    // here, not silently dropped. Mirror the dispatch logic in loop().
+    if (p.type == PACKET_TYPE_RREQ || p.type == PACKET_TYPE_RREP || p.type == PACKET_TYPE_RERR) {
+        ControlAction action;
+        action.type = CTRL_DROP;
+        if (p.type == PACKET_TYPE_RREQ) {
+            action = handle_rreq(p, local_addr, now_ms);
+        } else if (p.type == PACKET_TYPE_RREP) {
+            action = handle_rrep(p, local_addr, now_ms);
+        } else if (p.type == PACKET_TYPE_RERR) {
+            action = handle_rerr(p, local_addr, now_ms);
+        }
+        if (action.type == CTRL_FORWARD_BROADCAST) {
+            p.next_hop = 0xFFFF;
+            lora_send_packet(p);
+        } else if (action.type == CTRL_FORWARD_UNICAST) {
+            p.next_hop = action.next_hop;
+            lora_send_packet(p);
+        } else if (action.type == CTRL_GENERATE_RREP) {
+            Packet rrep;
+            packet_init(rrep);
+            rrep.msg_id      = esp_random();
+            rrep.src_addr    = p.dst_addr;
+            rrep.dst_addr    = p.src_addr;
+            rrep.prev_hop    = local_addr;
+            rrep.next_hop    = action.next_hop;
+            rrep.ttl         = 7;
+            rrep.seq_num     = 0;
+            rrep.type        = PACKET_TYPE_RREP;
+            rrep.ai_priority = 1;
+            rrep.payload_len = 0;
+            if (p.dst_addr != local_addr) {
+                RouteEntry cached_route;
+                if (routing_lookup(p.dst_addr, cached_route, now_ms)) {
+                    rrep.hop_count = cached_route.hop_count;
+                } else {
+                    rrep.hop_count = 0;
+                }
+            } else {
+                rrep.hop_count = 0;
+            }
+            delay(ACK_REPLY_DELAY_MS);
+            lora_send_packet(rrep);
+        }
+        return true;
+    }
+
     if (p.type == PACKET_TYPE_DATA) {
         if (dupdet_is_duplicate(p.msg_id, p.src_addr)) {
             DBG_PRINTF("[MESH_RX] duplicate DATA received src=0x%04X msg_id=%08X\n",
