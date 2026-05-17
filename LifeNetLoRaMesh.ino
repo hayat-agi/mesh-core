@@ -666,17 +666,6 @@ void setup() {
   }
 #endif
 
-  uint32_t now = millis();
-  routing_add_or_update(
-      GATEWAY_ADDR,
-      0x0004,         // Node 2 icin burasi boyle olacak Aracı / Next Hop (NODE 1)
-      1,              // hop_count
-      0,              // seq_num
-      now + 604800000, // node 
-      0,
-      ROUTE_VALID
-  );
-
   // BLE + NVS init (LoRa'yı yukarıda bıraktık)
   txRingInit(txRing);
 
@@ -788,7 +777,18 @@ void loop() {
               rrep.prev_hop = LOCAL_ADDR;
               rrep.next_hop = action.next_hop;
               rrep.ttl      = 7;
-              rrep.hop_count   = 0;
+              // BUG 6 fix: intermediate node must use cached route hop_count,
+              // not 0. When we are the destination, hop_count stays 0.
+              if (p.dst_addr != LOCAL_ADDR) {
+                  RouteEntry cached_route;
+                  if (routing_lookup(p.dst_addr, cached_route, now_ms)) {
+                      rrep.hop_count = cached_route.hop_count;
+                  } else {
+                      rrep.hop_count = 0;
+                  }
+              } else {
+                  rrep.hop_count = 0;
+              }
               rrep.seq_num     = ++local_seq_num;
               rrep.type        = PACKET_TYPE_RREP;
               rrep.ai_priority = 1;

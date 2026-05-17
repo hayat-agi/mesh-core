@@ -63,6 +63,15 @@ bool routing_add_or_update(uint16_t dst, uint16_t next_hop, uint8_t hop_count, u
     else if (invalid_idx != -1) target_idx = invalid_idx;
     else return false; 
 
+    // BUG 4 fix: do not overwrite a valid route with stale information
+    if (update_idx != -1) {
+        RouteEntry& existing = routing_table[update_idx];
+        if (existing.state == ROUTE_VALID) {
+            if (seq_num < existing.seq_num) return false;
+            if (seq_num == existing.seq_num && hop_count >= existing.hop_count) return false;
+        }
+    }
+
     routing_table[target_idx].destination = dst;
     routing_table[target_idx].next_hop = next_hop;
     routing_table[target_idx].hop_count = hop_count;
