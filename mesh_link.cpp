@@ -5,6 +5,8 @@
 #include "debug.h"
 #include <Arduino.h>
 
+extern uint16_t local_seq_num;
+
 #define ACK_TIMEOUT_MS 2000
 #define MAX_TX_RETRIES 3
 #define ACK_REPLY_DELAY_MS 150
@@ -201,7 +203,7 @@ bool mesh_handle_incoming(Packet& p, uint16_t local_addr, uint32_t now_ms) {
             rrep.prev_hop    = local_addr;
             rrep.next_hop    = action.next_hop;
             rrep.ttl         = 7;
-            rrep.seq_num     = 0;
+            rrep.seq_num     = ++local_seq_num;
             rrep.type        = PACKET_TYPE_RREP;
             rrep.ai_priority = 1;
             rrep.payload_len = 0;
