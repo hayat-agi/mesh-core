@@ -86,8 +86,13 @@ static const char* CHAR_SENSOR_UUID = "12345678-1234-1234-1234-123456789abf";
 // ─── MPU-6050 Configuration ──────────────────────────────────────────────────
 
 static const uint8_t  MPU_ADDR           = 0x68;
+#if BREADBOARD_NODE
 static const int      MPU_SDA_PIN        = 32;
 static const int      MPU_SCL_PIN        = 33;
+#else
+static const int      MPU_SDA_PIN        = 21;
+static const int      MPU_SCL_PIN        = 22;
+#endif
 static const uint32_t SENSOR_INTERVAL_MS = 40;  // 25 Hz
 
 static const char*    ACTIVATION_PASSWORD = "ACTIVATE_2026";
@@ -615,7 +620,7 @@ static void mpuInit() {
   mpuWriteReg(0x6B, 0x00);  // PWR_MGMT_1: wake up
   mpuWriteReg(0x1C, 0x00);  // ACCEL_CONFIG: ±2g
   mpuWriteReg(0x1B, 0x00);  // GYRO_CONFIG: ±250°/s
-  Serial.println("[MPU] MPU-6050 initialized (SDA=32, SCL=33, addr=0x68)");
+  Serial.printf("[MPU] MPU-6050 initialized (SDA=%d, SCL=%d, addr=0x68)\n", MPU_SDA_PIN, MPU_SCL_PIN);
 }
 
 // Packet format: 6 × float32 little-endian [ax, ay, az, gx, gy, gz]
