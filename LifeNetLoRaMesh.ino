@@ -74,7 +74,7 @@ static inline bool topo_allowed(uint16_t prev_hop) {
 
 static const uint32_t ACK_REPLY_DELAY_MS = 150;
 static const uint32_t RREP_REPLY_DELAY_MS = 150;
-static uint16_t local_seq_num = 0;
+uint16_t local_seq_num = 0;
 
 // ─── BLE / Activation Config ────────────────────────────────────────────────
 
