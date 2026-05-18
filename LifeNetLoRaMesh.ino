@@ -44,6 +44,29 @@
 #define PACKET_TYPE_BEACON  4
 #define PACKET_TYPE_ACK     6
 
+// ─── Test Topology Filter ────────────────────────────────────────────────────
+// Forces a linear chain: Node3(0x0003) → Node1(0x0001) → Node2(0x0002) → GW(0x0004)
+// Each node drops packets from non-neighbor nodes, simulating physical distance.
+// Set to 0 to disable and allow all packets (production mode).
+#define TEST_TOPOLOGY 1
+
+#if TEST_TOPOLOGY
+static inline bool topo_allowed(uint16_t prev_hop) {
+#if   LOCAL_ADDR == 0x0003
+    return prev_hop == 0x0001;
+#elif LOCAL_ADDR == 0x0001
+    return prev_hop == 0x0003 || prev_hop == 0x0002;
+#elif LOCAL_ADDR == 0x0002
+    return prev_hop == 0x0001 || prev_hop == 0x0004;
+#elif LOCAL_ADDR == 0x0004
+    return prev_hop == 0x0002;
+#else
+    return true;
+#endif
+}
+#endif
+// ─────────────────────────────────────────────────────────────────────────────
+
 #ifndef MAX_PAYLOAD_LEN
 #define MAX_PAYLOAD_LEN 220  // LoRa SX127x practical limit per hop
 #endif
@@ -742,6 +765,12 @@ void loop() {
 
   // Try to receive a packet with a small timeout to not block too long
   if (lora_receive_packet(p, 50)) {
+#if TEST_TOPOLOGY
+      if (!topo_allowed(p.prev_hop)) {
+          DBG_PRINTF("[TOPO] Drop from 0x%04X — not a neighbor\n", p.prev_hop);
+          return;
+      }
+#endif
       DBG_PRINTF("[RX] type=%d src=0x%04X dst=0x%04X prev=0x%04X next=0x%04X ttl=%d hop=%d\n",
                  p.type, p.src_addr, p.dst_addr, p.prev_hop, p.next_hop, p.ttl, p.hop_count);
       
