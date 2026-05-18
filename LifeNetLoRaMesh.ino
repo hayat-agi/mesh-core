@@ -31,6 +31,7 @@
 #include "store_forward.h"
 #include "mesh_link.h"
 #include "debug.h"
+#include "tx_ring_buffer.h"
 
 // ─── Mesh Config ────────────────────────────────────────────────────────────
 
@@ -121,16 +122,6 @@ static const uint32_t NOTIFY_INTERVAL_MS = 50;
 static uint32_t lastNotifyMs   = 0;
 static uint32_t lastSensorMs   = 0;
 
-// basit küçük TX kuyruğu
-#define TX_BUF_SLOTS    8
-#define TX_MSG_MAX_LEN  64
-
-struct TxRingBuffer {
-  char    data[TX_BUF_SLOTS][TX_MSG_MAX_LEN];
-  uint8_t head;
-  uint8_t tail;
-  uint8_t count;
-};
 static TxRingBuffer txRing;
 static portMUX_TYPE txRingMux = portMUX_INITIALIZER_UNLOCKED;
 
