@@ -3,9 +3,9 @@
 #include "mesh_packet.h"
 
 // ── PCB (Node 2 / Node 4) pin tanımları ──────────────────
-// Bu node'larda AUX pini bağlı değil; -1 vererek AUX beklemeyi devre dışı bırak.
+// AUX pini LoRa modülünün hazır sinyali. GPIO 4'e bağlı.
 #ifndef LORA_AUX_PIN
-#define LORA_AUX_PIN  (-1)   // -1 = AUX pini yok, sabit 60ms bekle
+#define LORA_AUX_PIN  4
 #endif
 
 // lora_rx_reset(): RX state machine'i sıfırlar.
